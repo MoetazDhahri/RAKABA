@@ -107,6 +107,15 @@ class ScoreOut(BaseModel):
         None, description="Score GNN si disponible, None sinon"
     )
 
+    # Analyse du fichier réel (F2.2 étendu) - uniquement présent si soumis via
+    # /documents/upload-file avec un fichier réel. Volontairement PAS inclus
+    # dans composite_score : voir content_forensics.py pour pourquoi (ranking
+    # d'aide à la décision, pas un verdict automatique fiable).
+    content_forensics : Optional[Dict[str, Any]] = Field(
+        None, description="Résultat de l'analyse forensique du fichier (structure PDF, "
+                           "régions candidates ELA) - a examiner visuellement, pas un score automatique"
+    )
+
     model_config = {"from_attributes": True}
 
 

@@ -35,9 +35,13 @@ contribuable (Youssef, simple et bienveillante, jamais accusatrice).
   floue, schéma DuckDB, générateur de signaux synthétiques, machine à états
   du cycle de vie, liaison d'entités, API de lecture, ordonnanceur de démo,
   19 tests.
-- ✅ **Pipeline 2 — Vérifier** (Khalil) : complet côté logique de scoring
+- ✅ **Pipeline 2 — Vérifier** (Khalil) : logique de scoring complète
   (intégrité, Isolation Forest, règles de risque, graphe, GNN optionnel),
-  exposé via son propre service FastAPI.
+  plus une forensique de fichier réel (`/documents/upload-file`) : détection
+  fiable d'édition post-finalisation d'un PDF, et analyse ELA pour repérer
+  une signature/un cachet potentiellement collé (voir
+  [`pipeline2/README.md`](pipeline2/README.md#f22-étendu--forensique-sur-fichier-réel-document_forensicspy)
+  pour ce qui est fiable vs. simplement indicatif).
 - ✅ **Pipeline 3 — Accompagner** (Choch) : chatbot + agent d'investigation
   (tool-calling), backend DuckDB avec seeding de secours autonome.
 

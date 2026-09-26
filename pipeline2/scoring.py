@@ -116,6 +116,7 @@ def score_document(
     historical_amounts: Sequence[float],
     document_id       : Optional[str] = None,
     submitted_date    : Optional[datetime] = None,
+    extra_integrity_flags: Optional[List[str]] = None,
 ) -> CompositeScore:
     """
     Orchestre les 3 axes de scoring pour un document.
@@ -131,6 +132,9 @@ def score_document(
     historical_amounts : historique des montants de l'entité (incluant le courant).
     document_id        : UUID str (généré si absent).
     submitted_date     : horodatage de soumission (UTC now si absent).
+    extra_integrity_flags : flags déterminés en amont depuis le fichier réel
+        (document_forensics.py, ex. `pdf_edited_after_finalization`) - fusionnés
+        dans le score d'intégrité F2.2.
 
     Retourne
     --------
@@ -140,7 +144,7 @@ def score_document(
     sub_dt  = submitted_date or datetime.utcnow()
 
     # --- F2.2 : Intégrité ---
-    integrity_result = check_integrity(file_metadata, declared_date)
+    integrity_result = check_integrity(file_metadata, declared_date, extra_flags=extra_integrity_flags)
     logger.debug("F2.2 integrity score=%.4f flags=%s", integrity_result.score, integrity_result.flags)
 
     # --- F2.3 : Cohérence (Isolation Forest) ---

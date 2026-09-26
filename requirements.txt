@@ -6,6 +6,7 @@ fastapi==0.111.0
 uvicorn[standard]==0.29.0
 duckdb>=1.0
 pydantic==2.7.1
+python-multipart>=0.0.9
 
 # ML
 scikit-learn==1.4.2
@@ -14,6 +15,11 @@ pandas==2.2.2
 
 # Graphe
 networkx==3.3
+
+# Forensique documentaire (F2.2 etendu : vrais fichiers PDF/image, voir document_forensics.py)
+pypdf>=4.0
+pymupdf>=1.24
+Pillow>=10.0
 
 # GNN (optionnel — commenter si PyTorch non disponible)
 # torch==2.3.0

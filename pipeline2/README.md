@@ -43,6 +43,7 @@ document entrant
 | Détection d'anomalies | scikit-learn (Isolation Forest) |
 | Graphe de relations | NetworkX |
 | GNN (optionnel) | PyTorch Geometric (GraphSAGE) |
+| Forensique fichier réel | pypdf (structure PDF), PyMuPDF (rendu PDF→image), Pillow/NumPy (ELA) |
 | Sérialisation | Pydantic v2 |
 | Runtime | Python 3.11+ |
 
@@ -66,6 +67,7 @@ pipeline2/
 ├── database.py            # Connexion DuckDB partagée (singleton), init_db
 ├── synthetic_data.py      # F2.1 — Générateur de données synthétiques
 ├── integrity.py           # F2.2 — Vérification d'intégrité (déterministe)
+├── document_forensics.py  # F2.2 étendu — structure PDF + Error Level Analysis sur vrai fichier
 ├── anomaly.py             # F2.3 — Isolation Forest
 ├── risk_rules.py          # F2.4 — Règles de schéma à risque
 ├── scoring.py             # F2.5 — Orchestrateur score composite
@@ -115,7 +117,8 @@ Au démarrage, l'application :
 
 | Méthode | Route | Description |
 |---------|-------|-------------|
-| `POST` | `/pipeline2/documents/upload` | Soumettre un document et déclencher le scoring |
+| `POST` | `/pipeline2/documents/upload` | Soumettre un document à partir de champs déclarés (F2.2 compare des dates que l'appelant affirme) |
+| `POST` | `/pipeline2/documents/upload-file` | Soumettre un **vrai fichier** PDF/image (F2.2 étendu — voir ci-dessous) |
 | `GET` | `/pipeline2/documents/{document_id}` | Score détaillé (3 axes + explications) |
 | `GET` | `/pipeline2/entities/{entity_id}/documents` | Tous les documents d'une entité |
 | `GET` | `/pipeline2/graph/entity/{entity_id}` | Sous-graphe centré sur une entité |
@@ -169,6 +172,42 @@ Réponse (document suspect) :
 }
 ```
 
+### Avec un vrai fichier (`/documents/upload-file`)
+
+```bash
+curl -X POST http://localhost:8000/pipeline2/documents/upload-file \
+  -F "entity_id=entity-001" \
+  -F "montant=5000" \
+  -F "nb_transactions=3" \
+  -F "activite_declaree=8000" \
+  -F "declared_date=2024-03-31" \
+  -F "file=@declaration_scannee.pdf"
+```
+
+Réponse : le même `ScoreOut` que ci-dessus, plus `content_forensics` — le détail de
+l'analyse du fichier réel (voir §F2.2 étendu ci-dessous) :
+
+```json
+{
+  "...": "... (comme ci-dessus) ...",
+  "content_forensics": {
+    "flags": ["pdf_edited_after_finalization"],
+    "pdf_structure": {
+      "incremental_update_count": 2,
+      "edited_after_finalization": true,
+      "producer": "Adobe Acrobat", "page_count": 1
+    },
+    "ela": {
+      "flagged": false,
+      "regions": [
+        {"bbox": [64, 336, 176, 384], "blocks": 11, "mean_error": 1.083, "severity": 11.91}
+      ],
+      "p90_baseline": 0.121
+    }
+  }
+}
+```
+
 ---
 
 ## Score composite
@@ -194,6 +233,59 @@ Inspecte les métadonnées du fichier :
 - `document_altered_after_creation` — `created_at ≠ modified_at`
 
 Pénalité : `-0.3` par flag, score borné `[0, 1]`.
+
+Sur `/documents/upload`, ces dates viennent de ce que l'**appelant affirme** dans
+`file_metadata` — utile pour tester, mais ça ne prouve rien sur un vrai document
+puisque rien n'empêche d'envoyer n'importe quelle date. `/documents/upload-file`
+(ci-dessous) corrige ça en travaillant sur le fichier réel.
+
+### F2.2 étendu — Forensique sur fichier réel (`document_forensics.py`)
+
+Sur `/documents/upload-file`, F2.2 ne fait plus confiance à des dates déclarées :
+il ouvre le fichier et vérifie deux choses, chacune avec une fiabilité très
+différente — testées, pas supposées (voir le détail des tests dans l'historique
+git de `document_forensics.py`) :
+
+**1. Structure PDF — fiable, alimente le score**
+Compte les marqueurs `%%EOF` dans le fichier brut. Un PDF a plus d'un `%%EOF`
+s'il a été enregistré plusieurs fois (ex. édité après une signature) — une
+mise à jour incrémentale ajoute une nouvelle révision à la suite de
+l'ancienne plutôt que de tout réécrire. Plus d'une sauvegarde
+→ `pdf_edited_after_finalization`, un flag scoré comme les autres flags F2.2.
+Vérifié sur un PDF généré puis ré-enregistré : `incremental_update_count`
+passe de 1 à 2, le flag apparaît, le score composite bouge en conséquence.
+
+**2. Error Level Analysis (ELA) — utile, mais PAS scoré automatiquement**
+Recompresse l'image (ou la 1ère page rendue d'un PDF) en JPEG et calcule la
+différence avec l'original : une zone collée depuis ailleurs (signature
+photographiée séparément, cachet copié, photo substituée) a un historique de
+compression différent du reste du document et ressort différemment.
+
+Calibré sur des cas de test synthétiques (signature et cachet collés) : la
+région réellement modifiée ressort **toujours** dans les toutes premières
+positions du classement par sévérité (`blocks × mean_error`) — c'est un vrai
+signal, pas du bruit. Mais aucun seuil unique de "c'est suspect" n'a séparé
+proprement les cas truqués des cas sains sur les deux documents de test :
+un simple titre en majuscules ou un champ dense (matricule fiscal) peut
+naturellement ressortir comme la zone la plus "chaude" d'un document
+parfaitement authentique. Un détecteur ELA fiable à 100% sans base de
+documents réels pour calibrer n'est pas un objectif raisonnable dans ce délai
+— et c'est d'ailleurs pour ça que les vrais outils forensiques (FotoForensics
+et consorts) sont des aides à l'examen visuel pour un humain formé, pas des
+verdicts automatiques.
+
+Donc : `content_forensics.ela` retourne **toujours** le classement complet des
+régions candidates (bbox, taille, sévérité) pour qu'Amira puisse les regarder
+elle-même sur le document ; le flag `pasted_content_suspected` existe pour
+signaler qu'au moins une région sort du lot, mais n'entre **pas** dans le
+calcul de `composite_score` — contrairement à `pdf_edited_after_finalization`.
+
+Limite assumée : cette technique ne détecte pas un simple chiffre modifié
+dans du texte natif (ex. "5000" retouché en "50000" directement dans
+l'éditeur) — il n'y a pas d'historique de compression différent à détecter
+dans ce cas. Ce type de fraude reste du ressort de F2.3 (l'Isolation Forest
+verra un montant statistiquement improbable) ou de la vérification structurelle
+PDF ci-dessus si l'édition est passée par un logiciel PDF.
 
 ### F2.3 — Isolation Forest
 - Features : montant normalisé, écart à l'historique, nb transactions, ratio montant/activité

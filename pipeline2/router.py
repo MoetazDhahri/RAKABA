@@ -3,7 +3,9 @@ pipeline2/router.py
 Endpoints FastAPI — Pipeline 2 : Vérifier.
 
 Routes :
-  POST   /documents/upload                — scoring complet d'un nouveau document
+  POST   /documents/upload                — scoring complet a partir de champs declares (F2.2 sur dates declarees)
+  POST   /documents/upload-file           — scoring complet a partir d'un vrai fichier PDF/image (F2.2 etendu :
+                                             vraies metadonnees + structure PDF + analyse ELA, cf. document_forensics.py)
   GET    /documents/{document_id}         — détail du score (3 axes + explications)
   GET    /entities/{entity_id}/documents  — liste des documents d'une entité
   GET    /graph/entity/{entity_id}        — nœuds/arêtes liés à une entité
@@ -29,9 +31,10 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import duckdb
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
-from .database import get_db
+from .database  import get_db
+from .document_forensics import analyze_document_bytes
 from .graph     import (
     EntityLink,
     build_graph, detect_clusters, get_entity_subgraph, graph_to_db_rows,
@@ -57,6 +60,7 @@ router = APIRouter(prefix="/pipeline2", tags=["Pipeline 2 — Vérifier"])
 def _row_to_score_out(row: Dict[str, Any]) -> ScoreOut:
     """Convertit une ligne `documents` (dict) en ScoreOut Pydantic."""
     risk_flags = json.loads(row["risk_flags"]) if row["risk_flags"] else []
+    file_meta  = json.loads(row["file_metadata"]) if row["file_metadata"] else {}
     return ScoreOut(
         document_id    = row["document_id"],
         entity_id      = row["entity_id"],
@@ -77,10 +81,11 @@ def _row_to_score_out(row: Dict[str, Any]) -> ScoreOut:
         ),
         composite_score   = row["composite_score"] if row["composite_score"] is not None else 0.0,
         gnn_anomaly_score = gnn_anomaly_score(row["entity_id"]),
+        content_forensics = file_meta.get("_content_forensics"),
     )
 
 
-def _composite_to_score_out(cs: CompositeScore) -> ScoreOut:
+def _composite_to_score_out(cs: CompositeScore, content_forensics: Optional[Dict[str, Any]] = None) -> ScoreOut:
     """Convertit un CompositeScore (scoring.py) en ScoreOut Pydantic."""
     return ScoreOut(
         document_id    = cs.document_id,
@@ -102,6 +107,7 @@ def _composite_to_score_out(cs: CompositeScore) -> ScoreOut:
         ),
         composite_score   = cs.composite_score,
         gnn_anomaly_score = cs.gnn_anomaly_score,
+        content_forensics = content_forensics,
     )
 
 
@@ -242,6 +248,92 @@ def upload_document(payload: DocumentIn, conn: duckdb.DuckDBPyConnection = Depen
 
     logger.info("Document %s uploadé et scoré (entity=%s).", doc_id, payload.entity_id)
     return _composite_to_score_out(cs)
+
+
+# ---------------------------------------------------------------------------
+# POST /documents/upload-file  (F2.2 étendu : vrai fichier, pas des dates déclarées)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/documents/upload-file",
+    response_model=ScoreOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Soumettre un vrai fichier (PDF/image) et déclencher le scoring complet",
+)
+async def upload_document_file(
+    entity_id         : str   = Form(...),
+    montant            : float = Form(...),
+    nb_transactions    : int   = Form(...),
+    activite_declaree  : float = Form(...),
+    declared_date      : str   = Form(..., description="Date ISO, ex. 2024-03-31"),
+    file               : UploadFile = File(...),
+    conn: duckdb.DuckDBPyConnection = Depends(get_db),
+) -> ScoreOut:
+    """
+    Comme /documents/upload, mais F2.2 travaille sur le VRAI fichier au lieu
+    de dates déclarées par l'appelant :
+      - compare declared_date aux vraies métadonnées du fichier (dates PDF
+        natives ou EXIF image), plutôt qu'à un file_metadata fourni par
+        l'appelant et donc potentiellement inventé ;
+      - détecte si un PDF a été édité après avoir été finalisé (mises à jour
+        incrémentales - flag scoré, fiable) ;
+      - repère par analyse ELA des régions qui pourraient correspondre à un
+        élément visuel collé (signature, cachet) - retourné dans
+        `content_forensics` pour examen visuel, PAS scoré automatiquement
+        (voir document_forensics.py pour pourquoi : ce signal se révèle trop
+        peu fiable en test pour un verdict automatique, mais reste une bonne
+        piste pour un examinateur humain).
+    """
+    from .integrity import _parse_dt
+
+    doc_id = str(uuid.uuid4())
+    file_bytes = await file.read()
+    filename = file.filename or "document"
+
+    forensics = analyze_document_bytes(file_bytes, filename)
+
+    declared_dt = _parse_dt(declared_date)
+    if declared_dt is None:
+        raise HTTPException(status_code=400, detail=f"declared_date invalide: {declared_date!r}")
+
+    historical = _get_entity_historical_amounts(entity_id, conn)
+    all_amounts = historical + [montant]
+
+    file_meta_dict = {
+        "filename": filename,
+        "montant": montant,
+        "created_at": forensics.real_created_at,
+        "modified_at": forensics.real_modified_at,
+    }
+
+    # Seul le flag structurel PDF (fiable) alimente le score - le signal ELA
+    # reste consultatif, voir document_forensics.py
+    scored_extra_flags = [f for f in forensics.flags if f != "pasted_content_suspected"]
+
+    cs = score_document(
+        entity_id          = entity_id,
+        file_metadata      = file_meta_dict,
+        declared_date      = declared_dt,
+        montant            = montant,
+        nb_transactions    = nb_transactions,
+        activite_declaree  = activite_declaree,
+        historical_amounts = all_amounts,
+        document_id        = doc_id,
+        extra_integrity_flags = scored_extra_flags,
+    )
+    cs.gnn_anomaly_score = gnn_anomaly_score(entity_id)
+
+    # file_metadata reste un blob JSON flexible - on y range aussi le detail
+    # forensique complet pour eviter une migration de schema.
+    persisted_meta = dict(file_meta_dict)
+    persisted_meta["_content_forensics"] = forensics.to_dict()
+    _persist_composite_score(cs, persisted_meta, conn)
+
+    logger.info(
+        "Document %s (fichier reel '%s') uploade et score (entity=%s, flags=%s).",
+        doc_id, filename, entity_id, cs.integrity.flags,
+    )
+    return _composite_to_score_out(cs, content_forensics=forensics.to_dict())
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Pénalité par flag (configurable sans modifier la logique)
 FLAG_PENALTY = 0.3
@@ -71,6 +71,7 @@ def _flag_created_differs_from_modified(
 def check_integrity(
     file_metadata: Dict[str, Any],
     declared_date: datetime,
+    extra_flags: Optional[List[str]] = None,
 ) -> IntegrityResult:
     """
     Vérifie l'intégrité d'un document fiscal à partir de ses métadonnées.
@@ -79,14 +80,22 @@ def check_integrity(
     ----------
     file_metadata : dict
         Doit contenir les clés : 'created_at', 'modified_at' (str ISO ou datetime).
+        Pour un fichier réellement uploadé (F2.2 étendu, voir document_forensics.py),
+        ces valeurs devraient venir de l'inspection du fichier lui-même
+        (ex. métadonnées PDF réelles), pas d'une déclaration de l'appelant.
     declared_date : datetime
         Date officielle de déclaration.
+    extra_flags : list[str], optionnel
+        Flags déjà déterminés en amont par une analyse du fichier réel (ex.
+        `pdf_edited_after_finalization` depuis document_forensics.py) - fusionnés
+        tels quels, chacun comptant pour la même pénalité que les flags F2.2
+        natifs.
 
     Retourne
     --------
     IntegrityResult avec score [0,1] et liste de flags.
     """
-    flags: List[str] = []
+    flags: List[str] = list(extra_flags or [])
 
     # --- Parsing des dates (supporte str ISO ou datetime) ---
     created_at  = _parse_dt(file_metadata.get("created_at"))
