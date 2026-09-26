@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional
 
 import duckdb
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from rapidfuzz import fuzz
 
 from .database  import get_db
 from .document_forensics import analyze_document_bytes, render_pdf_pages_to_images
@@ -116,29 +117,65 @@ def _extract_document_text(file_bytes: bytes, filename: str) -> str:
         return ""
 
 
+FUZZY_NAME_THRESHOLD = 70  # rapidfuzz partial_ratio, 0-100
+
+
+def _phone_found_in_text(text: str, phone: str) -> bool:
+    """True if the listing's phone number (last 8 digits) appears anywhere in the
+    document text, ignoring spacing/formatting. A phone number printed on an invoice
+    is a far more reliable identifier than the business name, which for informal/
+    unregistered sellers (see pipeline1/data_generator.py _UNKNOWN_BUSINESS_NAMES) is
+    only a generic category label and will never appear verbatim on a real document."""
+    phone_digits = re.sub(r"\D", "", phone or "")
+    if len(phone_digits) < 8:
+        return False
+    phone_digits = phone_digits[-8:]
+    text_digits = re.sub(r"\D", "", text)
+    return phone_digits in text_digits
+
+
 def _find_document_candidates(conn: duckdb.DuckDBPyConnection, filename: str, extracted_text: str) -> list[dict[str, Any]]:
     searchable = _normalize_document_text(f"{filename} {extracted_text}")
     rows = conn.execute(
         """
-        SELECT tl.entity_id, l.business_name, l.location_text
+        SELECT tl.entity_id, l.business_name, l.location_text, l.phone
         FROM taxpayer_lifecycle tl
         JOIN listings l ON l.listing_id = tl.listing_id
         """
     ).fetchall()
     candidates = []
-    for entity_id, business_name, location_text in rows:
+    for entity_id, business_name, location_text, phone in rows:
         name = _normalize_document_text(business_name)
         tokens = [token for token in re.findall(r"[a-z0-9]+", name) if len(token) > 2]
         matches = [token for token in tokens if token in searchable]
-        if not matches:
-            continue
-        confidence = min(0.98, 0.45 + (len(matches) / max(len(tokens), 1)) * 0.5)
+        phone_matched = _phone_found_in_text(extracted_text, phone)
+
+        if matches:
+            confidence = min(0.98, 0.45 + (len(matches) / max(len(tokens), 1)) * 0.5)
+            matched_on = list(matches)
+        elif phone_matched:
+            confidence = 0.9
+            matched_on = ["telephone"]
+        else:
+            # No exact token or phone hit: fall back to fuzzy name similarity so a
+            # slightly misspelled/OCR-mangled name can still surface as a low-confidence
+            # suggestion instead of no suggestion at all.
+            fuzzy_score = fuzz.partial_ratio(name, searchable)
+            if fuzzy_score < FUZZY_NAME_THRESHOLD:
+                continue
+            confidence = 0.3 + (fuzzy_score - FUZZY_NAME_THRESHOLD) / (100 - FUZZY_NAME_THRESHOLD) * 0.3
+            matched_on = ["similarite_nom"]
+
+        if phone_matched and matches:
+            confidence = min(0.99, confidence + 0.1)
+            matched_on.append("telephone")
+
         candidates.append({
             "entity_id": entity_id,
             "business_name": business_name,
             "location": location_text,
             "confidence": round(confidence, 2),
-            "matched_on": matches,
+            "matched_on": matched_on,
         })
     return sorted(candidates, key=lambda candidate: candidate["confidence"], reverse=True)[:5]
 
