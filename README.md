@@ -84,9 +84,9 @@ inconnue (404) — le tout dans le même process que les endpoints `/pipeline2/*
 - **Backend unifié (P2 + P3)** : FastAPI + Uvicorn (`main.py`, racine du dépôt) —
   Pipeline 3 est aussi utilisable seule en Flask pour le développement
   (`pipeline3/app.py`), les deux servent la même logique (`pipeline3/handlers.py`)
-- **IA conversationnelle et agent (P3)** : Grok (client compatible OpenAI), tool-use —
+- **IA conversationnelle et agent (P3)** : Groq (client compatible OpenAI), tool-use —
   note : le cahier des charges (§13) prévoyait Claude/API Anthropic ; le code
-  actuel utilise Grok, à confirmer si c'est un choix définitif de l'équipe
+  actuel utilise Groq, à confirmer si c'est un choix définitif de l'équipe
 - **Frontend** : React ou HTML/JS selon le temps disponible
 
 Aucune donnée réelle : toutes les données (annonces, registre, documents)
@@ -108,7 +108,7 @@ python -m pytest pipeline1/tests -v   # tests
 # Backend unifié : Pipeline 2 + Pipeline 3 dans le même process FastAPI
 pip install -r requirements.txt
 pip install -r pipeline3/requirements.txt
-cp pipeline3/.env.example pipeline3/.env   # puis renseigner GROK_API_KEY
+cp pipeline3/.env.example pipeline3/.env   # puis renseigner GROQ_API_KEY
 uvicorn main:app --reload
 # -> /pipeline2/*  (voir pipeline2/README.md)
 # -> /api/chat/client, /api/chat/admin, /api/investigate, /api/escalations  (voir pipeline3/README.md)

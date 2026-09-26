@@ -11,7 +11,7 @@ Access control is enforced here, not just in prompting:
 - chat_client only ever reads client-safe columns (no match_score, raw
   lifecycle_state, or other entities' data) and translates the lifecycle
   state through a fixed mapping before it ever reaches the prompt.
-- A keyword/intent classifier (escalation.py) runs before any Grok call and
+- A keyword/intent classifier (escalation.py) runs before any Groq call and
   short-circuits sensitive questions straight to a fixed escalation reply.
 """
 
@@ -25,7 +25,7 @@ import db
 import escalation
 import prompts
 import tools
-from grok_client import GrokAPIError, chat, run_tool_calling_loop
+from groq_client import GroqAPIError, chat, run_tool_calling_loop
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ def chat_client(
 
     try:
         reply = chat(system_prompt, conversation_history or [], message)
-    except GrokAPIError as exc:
+    except GroqAPIError as exc:
         return {"error": str(exc)}, 502
 
     return {"reply": reply, "escalated": False}, 200
@@ -156,7 +156,7 @@ def chat_admin(
 
     try:
         reply = chat(prompts.ADMIN_SYSTEM_PROMPT, conversation_history or [], message)
-    except GrokAPIError as exc:
+    except GroqAPIError as exc:
         return {"error": str(exc)}, 502
 
     return {"reply": reply}, 200
@@ -179,7 +179,7 @@ def investigate(inspector_id: Optional[str], entity_id: Optional[str]) -> Tuple[
             tools.TOOLS_SCHEMA,
             tools.TOOL_REGISTRY,
         )
-    except GrokAPIError as exc:
+    except GroqAPIError as exc:
         return {"error": str(exc)}, 502
 
     return {"report": report, "evidence_log": evidence_log}, 200

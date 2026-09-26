@@ -1,5 +1,5 @@
 """
-The 4 investigation tools available to the Grok-powered investigation agent
+The 4 investigation tools available to the Groq-powered investigation agent
 (/api/investigate), plus their JSON-schema definitions for function calling.
 
 Each function takes an entity_id and returns a plain dict (JSON-serializable)

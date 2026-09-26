@@ -1,7 +1,7 @@
 """
 Lightweight keyword/intent classifier for the client chatbot.
 
-Runs BEFORE calling Grok so flagged messages never reach the LLM for a full
+Runs BEFORE calling Groq so flagged messages never reach the LLM for a full
 answer. Deliberately simple (substring matching, no LLM call) to keep this
 fast and deterministic for a live demo.
 """

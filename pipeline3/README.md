@@ -18,7 +18,7 @@ time isn't supported (DuckDB allows one writer process per file); pick one.
 cd pipeline3
 pip install -r requirements.txt
 cp .env.example .env
-# edit .env and set GROK_API_KEY
+# edit .env and set GROQ_API_KEY
 python app.py
 ```
 
@@ -54,7 +54,7 @@ Enforced in code, not just prompting:
 - `/api/chat/client` only ever queries client-safe columns (no `risk_score`,
   raw `lifecycle_state`, or other entities' data) and translates the
   lifecycle state through a fixed mapping before it ever reaches the prompt.
-- A keyword/intent classifier (`escalation.py`) runs before any Grok call and
+- A keyword/intent classifier (`escalation.py`) runs before any Groq call and
   short-circuits sensitive questions (shared accounts/family, linked entities,
   legal-risk "what if I don't declare", investigation/suspicion) straight to
   a fixed escalation reply + a logged row in `escalations`.
@@ -133,7 +133,7 @@ curl http://localhost:5000/api/escalations
 - `router.py` - FastAPI adapter, mounted into the repo-root `main.py` for the unified backend
 - `__init__.py` - sys.path bootstrap so this package's flat sibling-imports resolve when mounted from outside
 - `db.py` - DuckDB connection (shared file, shared schema from `pipeline1/db.py`) + declarations seeding
-- `grok_client.py` - Grok API wrapper (chat + tool-calling loop)
+- `groq_client.py` - Groq API wrapper (chat + tool-calling loop)
 - `tools.py` - the 4 investigation tools + JSON schemas
 - `escalation.py` - client-side keyword/intent classifier
 - `prompts.py` - system prompts for all three chatbot surfaces

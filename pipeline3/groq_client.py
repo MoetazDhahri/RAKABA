@@ -1,6 +1,6 @@
 """
-Grok (xAI) API wrapper. Uses the OpenAI-compatible SDK pointed at
-https://api.x.ai/v1. Provides:
+Groq API wrapper. Uses the OpenAI-compatible SDK pointed at
+https://api.groq.com/openai/v1. Provides:
 - chat(): a plain chat completion (client + admin endpoints)
 - run_tool_calling_loop(): a real multi-step tool-calling loop where the
   model decides which tools to call and in what order (investigation agent)
@@ -12,25 +12,25 @@ from datetime import datetime, timezone
 
 from openai import OpenAI
 
-GROK_MODEL = os.environ.get("GROK_MODEL", "grok-4-latest")
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 MAX_TOOL_ITERATIONS = 6
 
 _client = None
 
 
-class GrokAPIError(Exception):
+class GroqAPIError(Exception):
     pass
 
 
 def _get_client():
     global _client
     if _client is None:
-        api_key = os.environ.get("GROK_API_KEY")
+        api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
-            raise GrokAPIError(
-                "GROK_API_KEY is not set. Copy .env.example to .env and add your key."
+            raise GroqAPIError(
+                "GROQ_API_KEY is not set. Copy .env.example to .env and add your key."
             )
-        _client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+        _client = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
     return _client
 
 
@@ -43,11 +43,11 @@ def chat(system_prompt: str, conversation_history: list, user_message: str) -> s
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model=GROK_MODEL,
+            model=GROQ_MODEL,
             messages=messages,
         )
     except Exception as exc:
-        raise GrokAPIError(f"Grok API call failed: {exc}") from exc
+        raise GroqAPIError(f"Groq API call failed: {exc}") from exc
 
     return response.choices[0].message.content or ""
 
@@ -59,9 +59,9 @@ def run_tool_calling_loop(
     tool_registry: dict,
 ):
     """
-    Runs a real tool-calling loop: Grok decides which tool(s) to call and in
+    Runs a real tool-calling loop: Groq decides which tool(s) to call and in
     what order, we execute them against the real data, feed results back, and
-    repeat until Grok returns a final answer with no more tool calls (or the
+    repeat until Groq returns a final answer with no more tool calls (or the
     iteration cap is hit).
 
     Returns (final_report: str, evidence_log: list[dict]).
@@ -74,19 +74,19 @@ def run_tool_calling_loop(
 
     try:
         client = _get_client()
-    except GrokAPIError:
+    except GroqAPIError:
         raise
 
     for _ in range(MAX_TOOL_ITERATIONS):
         try:
             response = client.chat.completions.create(
-                model=GROK_MODEL,
+                model=GROQ_MODEL,
                 messages=messages,
                 tools=tools_schema,
                 tool_choice="auto",
             )
         except Exception as exc:
-            raise GrokAPIError(f"Grok API call failed: {exc}") from exc
+            raise GroqAPIError(f"Groq API call failed: {exc}") from exc
 
         message = response.choices[0].message
         tool_calls = message.tool_calls
@@ -147,10 +147,10 @@ def run_tool_calling_loop(
 
     # Iteration cap hit: ask once more without tools to force a final answer.
     try:
-        response = client.chat.completions.create(model=GROK_MODEL, messages=messages)
+        response = client.chat.completions.create(model=GROQ_MODEL, messages=messages)
         final_text = response.choices[0].message.content or ""
     except Exception as exc:
-        raise GrokAPIError(f"Grok API call failed: {exc}") from exc
+        raise GroqAPIError(f"Groq API call failed: {exc}") from exc
 
     return final_text, evidence_log
 
