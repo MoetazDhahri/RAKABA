@@ -11,7 +11,6 @@ vers le meme fichier et s'assurer que ce schema existe).
 from __future__ import annotations
 
 import os
-import threading
 
 import duckdb
 
@@ -20,22 +19,26 @@ from pipeline1 import db as shared_db
 DB_PATH = os.environ.get("DUCKDB_PATH", str(shared_db.DEFAULT_DB_PATH))
 
 _conn: duckdb.DuckDBPyConnection | None = None
-_lock = threading.RLock()
 
 
 def get_connection() -> duckdb.DuckDBPyConnection:
     """Connexion DuckDB partagee (singleton par process)."""
     global _conn
     if _conn is None:
-        with _lock:
+        with shared_db.LOCK:
             if _conn is None:
                 _conn = shared_db.get_connection(DB_PATH)
     return _conn
 
 
 def get_db():
-    """Dependance FastAPI : fournit la connexion DuckDB partagee."""
-    yield get_connection()
+    """Dependance FastAPI : fournit la connexion DuckDB partagee. Le lock est
+    tenu pour toute la duree de la requete (voir pipeline1/db.py LOCK) - sans
+    ca, des requetes concurrentes du frontend Admin sur cette meme connexion
+    provoquent des resultats intermittents corrompus, pas juste des erreurs
+    visibles."""
+    with shared_db.LOCK:
+        yield get_connection()
 
 
 def init_db() -> None:

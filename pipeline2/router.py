@@ -538,18 +538,20 @@ def check_document_integrity(entity_id: str) -> dict:
     connexion DuckDB partagée. Retourne un dict vide si l'entité n'a aucun
     document.
     """
+    from pipeline1.db import LOCK
     from .database import get_connection
 
     conn = get_connection()
     try:
-        row = conn.execute(
-            """
-            SELECT document_id, entity_id, file_metadata, integrity_score, coherence_score,
-                   risk_flags, composite_score, submitted_date, integrity_flags, risk_score_raw
-            FROM documents WHERE entity_id = ? ORDER BY submitted_date DESC LIMIT 1
-            """,
-            [entity_id],
-        ).fetchone()
+        with LOCK:
+            row = conn.execute(
+                """
+                SELECT document_id, entity_id, file_metadata, integrity_score, coherence_score,
+                       risk_flags, composite_score, submitted_date, integrity_flags, risk_score_raw
+                FROM documents WHERE entity_id = ? ORDER BY submitted_date DESC LIMIT 1
+                """,
+                [entity_id],
+            ).fetchone()
         if row is None:
             return {}
         columns = ["document_id", "entity_id", "file_metadata", "integrity_score", "coherence_score",

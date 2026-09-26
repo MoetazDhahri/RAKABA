@@ -18,11 +18,23 @@ specifiques a DuckDB.
 """
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import duckdb
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "rakaba.duckdb"
+
+# Shared across ALL THREE pipelines (pipeline2/database.py and pipeline3/db.py
+# both import this exact object rather than making their own) - a single
+# DuckDB connection object is reused process-wide for the real file (see
+# get_connection() below), and DuckDB connections aren't safe for concurrent
+# multi-threaded use. FastAPI runs sync route handlers in a thread pool, so
+# without one shared lock serializing access, concurrent requests from the
+# Admin frontend intermittently returned wrong/empty results even though the
+# same query succeeded a moment later run in isolation - a real bug caught by
+# testing the actual UI under concurrent load, not a hypothetical.
+LOCK = threading.RLock()
 
 SCHEMA_STATEMENTS = [
     """
@@ -138,10 +150,29 @@ _ALL_TABLES = (
 )
 
 
+# Connection cache, keyed by resolved path - real files get ONE shared
+# connection per process (opening a second duckdb.connect() to the same
+# file and re-running schema DDL concurrently causes a catalog
+# write-write conflict, which is exactly what happened the moment the
+# Admin frontend started firing several concurrent requests on page load).
+# ":memory:" is deliberately excluded: pipeline1's own test suite calls
+# get_connection(":memory:") expecting a fresh, isolated database every
+# time, and caching it would leak state between tests.
+_connection_cache: dict[str, duckdb.DuckDBPyConnection] = {}
+
+
 def get_connection(db_path: Path | str = DEFAULT_DB_PATH) -> duckdb.DuckDBPyConnection:
-    conn = duckdb.connect(str(db_path))
-    init_schema(conn)
-    return conn
+    path_str = str(db_path)
+    if path_str == ":memory:":
+        conn = duckdb.connect(path_str)
+        init_schema(conn)
+        return conn
+
+    if path_str not in _connection_cache:
+        conn = duckdb.connect(path_str)
+        init_schema(conn)
+        _connection_cache[path_str] = conn
+    return _connection_cache[path_str]
 
 
 def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
@@ -151,9 +182,12 @@ def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
 
 def reset_database(db_path: Path | str = DEFAULT_DB_PATH) -> duckdb.DuckDBPyConnection:
     """Drops every RAKABA table (all 3 pipelines) and recreates them empty. Used by the seed script (X2)."""
-    conn = duckdb.connect(str(db_path))
+    path_str = str(db_path)
+    conn = duckdb.connect(path_str)
     for table in _ALL_TABLES:
         conn.execute(f"DROP TABLE IF EXISTS {table};")
     conn.execute("DROP SEQUENCE IF EXISTS listing_id_seq;")
     init_schema(conn)
+    if path_str != ":memory:":
+        _connection_cache[path_str] = conn
     return conn

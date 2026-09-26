@@ -18,7 +18,6 @@ through taxpayer_lifecycle/listings directly (see tools.py, app.py).
 
 import os
 import sys
-import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -37,7 +36,13 @@ from pipeline1 import db as shared_db
 DB_PATH = os.environ.get("DUCKDB_PATH", str(shared_db.DEFAULT_DB_PATH))
 
 _conn = None
-_lock = threading.RLock()  # reentrant: run()/execute() hold it while calling get_connection()
+# The SAME lock object pipeline1/db.py and pipeline2/database.py use, not a
+# separate one - all three pipelines can share one physical DuckDB connection
+# object in the unified backend process, and a connection isn't safe for
+# concurrent multi-threaded use. A lock private to this module would only
+# serialize Pipeline 3's own queries against each other, not against
+# Pipelines 1/2 hitting the same connection at the same time.
+_lock = shared_db.LOCK
 
 
 def get_connection():

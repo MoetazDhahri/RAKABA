@@ -34,7 +34,9 @@ contribuable (Youssef, simple et bienveillante, jamais accusatrice).
 - ✅ **Pipeline 1 — Découvrir** (Moetaz) : complet. Moteur de correspondance
   floue, schéma DuckDB, générateur de signaux synthétiques, machine à états
   du cycle de vie, liaison d'entités, API de lecture, ordonnanceur de démo,
-  19 tests.
+  19 tests. Expose aussi désormais une API HTTP (`pipeline1/router.py`) —
+  kanban, détail d'entité, forçage manuel de transition (F1.8), journal, et
+  l'agrégation qui alimente le tableau de bord Admin (`pipeline1/dashboard.py`).
 - ✅ **Pipeline 2 — Vérifier** (Khalil) : logique de scoring complète
   (intégrité, Isolation Forest, règles de risque, graphe, GNN optionnel),
   plus une forensique de fichier réel (`/documents/upload-file`) : détection
@@ -79,6 +81,19 @@ créée par Pipeline 1 → `/api/chat/client` classifie et escalade → visible
 sur `/api/escalations` → `/api/investigate` gère correctement une entité
 inconnue (404) — le tout dans le même process que les endpoints `/pipeline2/*`.
 
+### ✅ Interface Admin (React)
+
+Vue d'ensemble (carte de Tunisie par gouvernorat, KPI, alertes, évolution,
+répartition par pipeline, top entités à risque), kanban de détection avec
+détail d'entité et forçage manuel (F1.8), upload de document réel avec
+scoring en direct (F2.2-F2.5) et clusters de fraude (F2.6), chatbot admin +
+agent d'investigation avec trace de raisonnement, journal d'automatisation.
+Aucune donnée fictive : tout vient des vrais endpoints ci-dessus. Voir
+[`frontend/admin/README.md`](frontend/admin/README.md) pour le détail,
+notamment une note de concurrence importante si vous ajoutez un endpoint qui
+touche la base partagée (un vrai bug trouvé en testant l'UI sous charge
+concurrente, pas une précaution théorique).
+
 ## Stack technique
 
 - **Correspondance floue (P1)** : `rapidfuzz`
@@ -95,7 +110,7 @@ inconnue (404) — le tout dans le même process que les endpoints `/pipeline2/*
   voir [`pipeline3/README.md`](pipeline3/README.md#voice-apivoicechatclient-apivoicechatadmin)
   pour ce qui fonctionne vraiment en dialecte tunisien (script arabe oui, transcription
   Arabizi non) et ce qui reste à valider
-- **Frontend** : React ou HTML/JS selon le temps disponible
+- **Frontend Admin** : React + Vite (`frontend/admin/`), servi en production par le backend unifié sur `/admin`
 
 Aucune donnée réelle : toutes les données (annonces, registre, documents)
 sont synthétiques, par choix de conception — conformité à la loi organique
@@ -113,17 +128,27 @@ python -m pipeline1.pipeline          # un cycle automatisé
 python -m pipeline1.demo_loop --fresh --interval 8   # mode démo en continu
 python -m pytest pipeline1/tests -v   # tests
 
-# Backend unifié : Pipeline 2 + Pipeline 3 dans le même process FastAPI
+# Backend unifié : Pipeline 1 (API) + Pipeline 2 + Pipeline 3 dans le même process FastAPI
 pip install -r requirements.txt
 pip install -r pipeline3/requirements.txt
-cp pipeline3/.env.example pipeline3/.env   # puis renseigner GROQ_API_KEY
+cp pipeline3/.env.example pipeline3/.env   # puis renseigner GROQ_API_KEY et ELEVENLABS_API_KEY
+
+# Interface Admin : build requis avant de lancer le backend (dist/ n'est pas versionné)
+cd frontend/admin && npm install && npm run build && cd ../..
+
 uvicorn main:app --reload
-# -> /pipeline2/*  (voir pipeline2/README.md)
-# -> /api/chat/client, /api/chat/admin, /api/investigate, /api/escalations  (voir pipeline3/README.md)
+# -> /admin                                       (interface Admin React, voir frontend/admin/README.md)
+# -> /pipeline1/*                                 (voir pipeline1/README.md)
+# -> /pipeline2/*                                 (voir pipeline2/README.md)
+# -> /api/chat/client, /api/chat/admin, /api/investigate, /api/escalations, /api/voice/*  (voir pipeline3/README.md)
 
 # Pipeline 3 seule, en Flask (dev/tests indépendants, voir pipeline3/README.md)
 cd pipeline3 && python app.py
 ```
+
+Pour développer l'interface Admin avec rechargement à chaud plutôt que de
+rebuilder à chaque changement : `cd frontend/admin && npm run dev` (proxy
+Vite vers le backend sur `:8000`, qui doit tourner en parallèle).
 
 Chaque pipeline documente ses propres détails, règles de scoring et points
 d'intégration dans son `README.md`.
