@@ -1,44 +1,44 @@
 """
 pipeline2/database.py
-Configuration SQLAlchemy partagée pour la Pipeline 2.
+Connexion DuckDB partagee pour la Pipeline 2 (F2.5, F2.6).
 
-Si un module `database.py` existe déjà à la racine du projet (créé par
-Pipeline 1 ou 3), ce fichier peut être supprimé et les imports dans
-router.py mis à jour vers `from database import get_db, SessionLocal`.
+Remplace l'ancien moteur SQLAlchemy/SQLite : la base partagee entre les
+trois pipelines est un fichier DuckDB unique (cf. pipeline1/db.py, qui
+definit le schema canonique — ce module ne fait qu'ouvrir une connexion
+vers le meme fichier et s'assurer que ce schema existe).
 """
 
 from __future__ import annotations
 
 import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
-from typing import Generator
+import threading
 
-# Chemin de la base SQLite partagée (configurable via variable d'environnement)
-DATABASE_URL = os.getenv("RAKABA_DB_URL", "sqlite:///./rakaba.db")
+import duckdb
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False},  # nécessaire pour SQLite avec FastAPI
-    echo=False,
-)
+from pipeline1 import db as shared_db
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+DB_PATH = os.environ.get("DUCKDB_PATH", str(shared_db.DEFAULT_DB_PATH))
+
+_conn: duckdb.DuckDBPyConnection | None = None
+_lock = threading.RLock()
 
 
-def get_db() -> Generator[Session, None, None]:
-    """Dépendance FastAPI : fournit une session SQLAlchemy par requête."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+def get_connection() -> duckdb.DuckDBPyConnection:
+    """Connexion DuckDB partagee (singleton par process)."""
+    global _conn
+    if _conn is None:
+        with _lock:
+            if _conn is None:
+                _conn = shared_db.get_connection(DB_PATH)
+    return _conn
+
+
+def get_db():
+    """Dependance FastAPI : fournit la connexion DuckDB partagee."""
+    yield get_connection()
 
 
 def init_db() -> None:
-    """
-    Crée les tables Pipeline 2 si elles n'existent pas encore.
-    Appelé au démarrage de l'application.
-    """
-    from .models import Base
-    Base.metadata.create_all(bind=engine)
+    """Cree les tables du schema partage si elles n'existent pas encore.
+    Appelee au demarrage de l'application (idempotent)."""
+    get_connection()

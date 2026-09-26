@@ -39,39 +39,42 @@ document entrant
 | Composant | Technologie |
 |-----------|-------------|
 | API | FastAPI + Uvicorn |
-| Base de données | SQLite via SQLAlchemy |
+| Base de données | DuckDB (partagée avec Pipelines 1 et 3, `rakaba.duckdb`) |
 | Détection d'anomalies | scikit-learn (Isolation Forest) |
 | Graphe de relations | NetworkX |
 | GNN (optionnel) | PyTorch Geometric (GraphSAGE) |
 | Sérialisation | Pydantic v2 |
 | Runtime | Python 3.11+ |
 
-> ⚠️ Voir le README racine, section "Point d'intégration à résoudre" : ce
-> module cible SQLite/SQLAlchemy alors que les Pipelines 1 et 3 partagent un
-> fichier DuckDB (`rakaba.duckdb`). À réconcilier avant l'assemblage final.
+> Mis à jour lors de l'unification des trois pipelines : ce module ciblait
+> initialement SQLite/SQLAlchemy sur son propre fichier ; il utilise
+> désormais le même DuckDB partagé que Pipelines 1 et 3, avec le schéma
+> canonique défini dans `pipeline1/db.py`. `router.py` lit/écrit directement
+> via SQL (plus d'ORM), et le graphe (`entity_graph_nodes/edges`) est
+> reconstruit à la volée depuis la table `entity_links` réelle de Pipeline 1
+> à chaque appel à `/graph/entity/*` ou `/graph/clusters`.
 
 ---
 
 ## Arborescence
 
 ```
-RAKABA p2/
-├── main.py                    # Point d'entrée FastAPI
-├── requirements.txt           # Dépendances épinglées
-└── pipeline2/
-    ├── __init__.py            # startup_pipeline2() + export router
-    ├── models.py              # ORM : Document, EntityGraphNode, EntityGraphEdge
-    ├── schemas.py              # Pydantic : I/O avec explicabilité complète
-    ├── database.py            # Engine SQLite, SessionLocal, init_db
-    ├── synthetic_data.py      # F2.1 — Générateur de données synthétiques
-    ├── integrity.py           # F2.2 — Vérification d'intégrité (déterministe)
-    ├── anomaly.py             # F2.3 — Isolation Forest
-    ├── risk_rules.py          # F2.4 — Règles de schéma à risque
-    ├── scoring.py             # F2.5 — Orchestrateur score composite
-    ├── graph.py               # F2.6 — Graphe NetworkX + clusters
-    ├── gnn.py                 # F2.7 — GNN optionnel (GraphSAGE)
-    └── router.py              # Endpoints FastAPI
+pipeline2/
+├── __init__.py            # startup_pipeline2() + export router
+├── models.py              # EdgeType (enum) — plus d'ORM, tables dans pipeline1/db.py
+├── schemas.py             # Pydantic : I/O avec explicabilité complète
+├── database.py            # Connexion DuckDB partagée (singleton), init_db
+├── synthetic_data.py      # F2.1 — Générateur de données synthétiques
+├── integrity.py           # F2.2 — Vérification d'intégrité (déterministe)
+├── anomaly.py             # F2.3 — Isolation Forest
+├── risk_rules.py          # F2.4 — Règles de schéma à risque
+├── scoring.py             # F2.5 — Orchestrateur score composite
+├── graph.py               # F2.6 — Graphe NetworkX + conversion en lignes DuckDB
+├── gnn.py                 # F2.7 — GNN optionnel (GraphSAGE)
+└── router.py              # Endpoints FastAPI (lecture/écriture DuckDB directe)
 ```
+
+(`main.py`, `requirements.txt` restent à la racine du dépôt.)
 
 ---
 
@@ -98,9 +101,16 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Au démarrage, l'application :
-1. Crée les tables SQLite si elles n'existent pas
+1. Ouvre `rakaba.duckdb` et crée les tables du schéma partagé si elles n'existent pas
 2. Entraîne l'Isolation Forest sur 500 documents synthétiques (seed=42)
 3. Tente d'entraîner le GNN — silencieusement ignoré si PyTorch Geometric est absent
+
+> ⚠️ Ne pas lancer simultanément avec Pipeline 3 (Flask, `pipeline3/app.py`)
+> sur le même fichier `rakaba.duckdb` pour l'instant : DuckDB verrouille le
+> fichier pour un seul processus écrivain à la fois. Le cahier des charges
+> (§14) prévoit un seul backend pour les deux interfaces ; fusionner les deux
+> apps (monter le router Pipeline 2 et le blueprint/WSGI de Pipeline 3 dans
+> un seul process) est la vraie solution, pas encore faite.
 
 **Swagger UI** : [http://localhost:8000/docs](http://localhost:8000/docs)
 
@@ -233,7 +243,7 @@ result = check_document_integrity("entity-001")
 
 | Variable | Défaut | Description |
 |----------|--------|-------------|
-| `RAKABA_DB_URL` | `sqlite:///./rakaba.db` | URL SQLAlchemy de la base partagée |
+| `DUCKDB_PATH` | `rakaba.duckdb` (racine du dépôt) | Chemin du fichier DuckDB partagé (même variable que Pipeline 3) |
 
 ---
 

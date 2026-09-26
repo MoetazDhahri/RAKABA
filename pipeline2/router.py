@@ -12,25 +12,31 @@ Routes :
 
 Fonction Python pure (hors HTTP) :
   check_document_integrity(entity_id) → dict
+
+Persistance : DuckDB partagé avec les Pipelines 1 et 3 (pipeline2/database.py).
+Le graphe (entity_graph_nodes/edges) est reconstruit à la volée depuis la
+table entity_links partagée de Pipeline 1 — c'est la vraie source de vérité
+des liaisons d'entités (F1.6), Pipeline 2 la lit plutôt que de la dupliquer
+(cf. cahier des charges §14).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import duckdb
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
 
-from .database  import get_db
+from .database import get_db
 from .graph     import (
     EntityLink,
-    build_graph, detect_clusters, get_entity_subgraph, graph_to_db_objects,
+    build_graph, detect_clusters, get_entity_subgraph, graph_to_db_rows,
 )
 from .gnn       import gnn_anomaly_score, is_gnn_available
-from .models    import Document, EntityGraphEdge, EntityGraphNode
 from .schemas   import (
     CoherenceDetail, DocumentIn, DocumentListOut,
     EdgeTypeEnum, EntityGraphOut, GraphClusterOut,
@@ -45,34 +51,32 @@ router = APIRouter(prefix="/pipeline2", tags=["Pipeline 2 — Vérifier"])
 
 
 # ---------------------------------------------------------------------------
-# Helpers de conversion ORM → Pydantic
+# Helpers de lecture/écriture DuckDB (remplacent l'ORM SQLAlchemy)
 # ---------------------------------------------------------------------------
 
-def _orm_document_to_score_out(doc: Document) -> ScoreOut:
-    """Convertit un objet ORM Document en ScoreOut Pydantic."""
-    risk_flags  = doc.risk_flags or []
-    nb_flags    = len(risk_flags)
-
+def _row_to_score_out(row: Dict[str, Any]) -> ScoreOut:
+    """Convertit une ligne `documents` (dict) en ScoreOut Pydantic."""
+    risk_flags = json.loads(row["risk_flags"]) if row["risk_flags"] else []
     return ScoreOut(
-        document_id    = doc.document_id,
-        entity_id      = doc.entity_id,
-        submitted_date = doc.submitted_date,
+        document_id    = row["document_id"],
+        entity_id      = row["entity_id"],
+        submitted_date = row["submitted_date"],
         integrity = IntegrityDetail(
-            score = doc.integrity_score or 0.5,
-            flags = doc.integrity_flags or [],
+            score = row["integrity_score"] if row["integrity_score"] is not None else 0.5,
+            flags = json.loads(row["integrity_flags"]) if row["integrity_flags"] else [],
         ),
         coherence = CoherenceDetail(
-            score        = doc.coherence_score or 0.5,
+            score        = row["coherence_score"] if row["coherence_score"] is not None else 0.5,
             raw_if_score = None,
             explanation  = "Score chargé depuis la base de données.",
         ),
         risk = RiskDetail(
             flags      = risk_flags,
-            nb_flags   = nb_flags,
-            risk_score = float(nb_flags),
+            nb_flags   = len(risk_flags),
+            risk_score = row["risk_score_raw"] if row["risk_score_raw"] is not None else float(len(risk_flags)),
         ),
-        composite_score   = doc.composite_score or 0.0,
-        gnn_anomaly_score = gnn_anomaly_score(doc.entity_id),
+        composite_score   = row["composite_score"] if row["composite_score"] is not None else 0.0,
+        gnn_anomaly_score = gnn_anomaly_score(row["entity_id"]),
     )
 
 
@@ -101,43 +105,100 @@ def _composite_to_score_out(cs: CompositeScore) -> ScoreOut:
     )
 
 
+def _fetch_document(conn: duckdb.DuckDBPyConnection, document_id: str) -> Optional[Dict[str, Any]]:
+    row = conn.execute(
+        """
+        SELECT document_id, entity_id, file_metadata, integrity_score, coherence_score,
+               risk_flags, composite_score, submitted_date, integrity_flags, risk_score_raw
+        FROM documents WHERE document_id = ?
+        """,
+        [document_id],
+    ).fetchone()
+    if row is None:
+        return None
+    columns = ["document_id", "entity_id", "file_metadata", "integrity_score", "coherence_score",
+               "risk_flags", "composite_score", "submitted_date", "integrity_flags", "risk_score_raw"]
+    return dict(zip(columns, row))
+
+
 def _persist_composite_score(
     cs: CompositeScore,
     file_metadata: Dict[str, Any],
-    db: Session,
-) -> Document:
-    """Crée ou met à jour un objet Document en base."""
-    doc = Document(
-        document_id     = cs.document_id,
-        entity_id       = cs.entity_id,
-        file_metadata   = file_metadata,
-        integrity_score = cs.integrity.score,
-        coherence_score = cs.coherence.score,
-        risk_flags      = cs.risk.flags,
-        composite_score = cs.composite_score,
-        submitted_date  = cs.submitted_date,
-        integrity_flags = cs.integrity.flags,
-        risk_score_raw  = cs.risk.risk_score,
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Crée ou met à jour la ligne `documents` correspondante (upsert)."""
+    conn.execute("DELETE FROM documents WHERE document_id = ?", [cs.document_id])
+    conn.execute(
+        """
+        INSERT INTO documents
+            (document_id, entity_id, file_metadata, integrity_score, coherence_score,
+             risk_flags, composite_score, submitted_date, integrity_flags, risk_score_raw)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            cs.document_id, cs.entity_id, json.dumps(file_metadata),
+            cs.integrity.score, cs.coherence.score, json.dumps(cs.risk.flags),
+            cs.composite_score, cs.submitted_date, json.dumps(cs.integrity.flags),
+            cs.risk.risk_score,
+        ],
     )
-    # db.merge() retourne l'instance persistée — utiliser cette référence
-    merged = db.merge(doc)
-    db.commit()
-    db.refresh(merged)
-    return merged
 
 
-def _get_entity_historical_amounts(entity_id: str, db: Session) -> List[float]:
-    """Récupère l'historique des montants d'une entité depuis la base."""
-    docs = db.query(Document).filter(Document.entity_id == entity_id).all()
-    # On extrait le montant depuis file_metadata si disponible, sinon on utilise
-    # composite_score comme proxy (les montants bruts ne sont pas persistés séparément).
-    # En production, ajouter une colonne `montant` dans Document.
+def _get_entity_historical_amounts(entity_id: str, conn: duckdb.DuckDBPyConnection) -> List[float]:
+    """Récupère l'historique des montants d'une entité depuis la base.
+    Le montant brut n'est pas persisté séparément ; on le relit depuis
+    file_metadata quand présent (voir note dans DocumentIn)."""
+    rows = conn.execute(
+        "SELECT file_metadata FROM documents WHERE entity_id = ?", [entity_id]
+    ).fetchall()
     amounts = []
-    for d in docs:
-        meta = d.file_metadata or {}
+    for (meta_json,) in rows:
+        meta = json.loads(meta_json) if meta_json else {}
         if "montant" in meta:
             amounts.append(float(meta["montant"]))
     return amounts
+
+
+# ---------------------------------------------------------------------------
+# F2.6 — Reconstruction du graphe depuis entity_links (Pipeline 1)
+# ---------------------------------------------------------------------------
+
+def _sync_graph_from_entity_links(conn: duckdb.DuckDBPyConnection) -> None:
+    """Reconstruit entity_graph_nodes/edges à partir de la table entity_links
+    partagée (F1.6) — celle-ci reste la source de vérité des liaisons ;
+    Pipeline 2 la lit et projette un graphe dessus, sans la dupliquer
+    (cf. cahier des charges §14 : "Pipeline 2 lit entity_links, écrit
+    entity_graph_nodes/edges")."""
+    rows = conn.execute(
+        "SELECT entity_id_a, entity_id_b, shared_attribute, link_score FROM entity_links"
+    ).fetchall()
+
+    conn.execute("DELETE FROM entity_graph_edges")
+    conn.execute("DELETE FROM entity_graph_nodes")
+
+    if not rows:
+        return
+
+    links = [
+        EntityLink(
+            entity_id_a=a, entity_id_b=b, shared_attribute=attr,
+            link_score=score or 0.0, edge_type=attr,
+        )
+        for (a, b, attr, score) in rows
+    ]
+    G = build_graph(links)
+    node_rows, edge_rows = graph_to_db_rows(G)
+
+    for n in node_rows:
+        conn.execute(
+            "INSERT INTO entity_graph_nodes VALUES (?, ?, ?)",
+            [n["node_id"], json.dumps(n["feature_vector"]), gnn_anomaly_score(n["node_id"])],
+        )
+    for e in edge_rows:
+        conn.execute(
+            "INSERT INTO entity_graph_edges VALUES (?, ?, ?, ?, ?)",
+            [e["edge_id"], e["node_a"], e["node_b"], e["edge_type"], e["weight"]],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -150,19 +211,19 @@ def _get_entity_historical_amounts(entity_id: str, db: Session) -> List[float]:
     status_code=status.HTTP_201_CREATED,
     summary="Soumettre un document et déclencher le scoring complet",
 )
-def upload_document(payload: DocumentIn, db: Session = Depends(get_db)) -> ScoreOut:
+def upload_document(payload: DocumentIn, conn: duckdb.DuckDBPyConnection = Depends(get_db)) -> ScoreOut:
     """
     Reçoit un document fiscal, déclenche le pipeline de scoring complet
     (F2.2 + F2.3 + F2.4 + F2.5) et persiste le résultat.
     """
     doc_id = str(uuid.uuid4())
 
-    # Historique des montants de l'entité (pour F2.3)
-    historical = _get_entity_historical_amounts(payload.entity_id, db)
-    # Inclure le montant courant dans l'historique pour les règles F2.4
+    historical = _get_entity_historical_amounts(payload.entity_id, conn)
     all_amounts = historical + [payload.montant]
 
     file_meta_dict = payload.file_metadata.model_dump(mode="json")
+    # Le montant est nécessaire pour reconstruire l'historique côté F2.4/F2.3
+    file_meta_dict["montant"] = payload.montant
 
     cs = score_document(
         entity_id         = payload.entity_id,
@@ -175,10 +236,9 @@ def upload_document(payload: DocumentIn, db: Session = Depends(get_db)) -> Score
         document_id       = doc_id,
     )
 
-    # Enrichissement GNN si disponible
     cs.gnn_anomaly_score = gnn_anomaly_score(payload.entity_id)
 
-    _persist_composite_score(cs, file_meta_dict, db)
+    _persist_composite_score(cs, file_meta_dict, conn)
 
     logger.info("Document %s uploadé et scoré (entity=%s).", doc_id, payload.entity_id)
     return _composite_to_score_out(cs)
@@ -193,18 +253,15 @@ def upload_document(payload: DocumentIn, db: Session = Depends(get_db)) -> Score
     response_model=ScoreOut,
     summary="Récupérer le score détaillé d'un document",
 )
-def get_document_score(document_id: str, db: Session = Depends(get_db)) -> ScoreOut:
-    """
-    Retourne le détail du score d'un document (3 axes + explications).
-    Jamais uniquement le chiffre global.
-    """
-    doc = db.query(Document).filter(Document.document_id == document_id).first()
-    if not doc:
+def get_document_score(document_id: str, conn: duckdb.DuckDBPyConnection = Depends(get_db)) -> ScoreOut:
+    """Retourne le détail du score d'un document (3 axes + explications)."""
+    row = _fetch_document(conn, document_id)
+    if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document {document_id!r} introuvable.",
         )
-    return _orm_document_to_score_out(doc)
+    return _row_to_score_out(row)
 
 
 # ---------------------------------------------------------------------------
@@ -216,19 +273,20 @@ def get_document_score(document_id: str, db: Session = Depends(get_db)) -> Score
     response_model=DocumentListOut,
     summary="Lister tous les documents d'une entité",
 )
-def list_entity_documents(entity_id: str, db: Session = Depends(get_db)) -> DocumentListOut:
+def list_entity_documents(entity_id: str, conn: duckdb.DuckDBPyConnection = Depends(get_db)) -> DocumentListOut:
     """Liste tous les documents soumis par une entité, du plus récent au plus ancien."""
-    docs = (
-        db.query(Document)
-        .filter(Document.entity_id == entity_id)
-        .order_by(Document.submitted_date.desc())
-        .all()
-    )
-    return DocumentListOut(
-        entity_id = entity_id,
-        total     = len(docs),
-        documents = [_orm_document_to_score_out(d) for d in docs],
-    )
+    rows = conn.execute(
+        """
+        SELECT document_id, entity_id, file_metadata, integrity_score, coherence_score,
+               risk_flags, composite_score, submitted_date, integrity_flags, risk_score_raw
+        FROM documents WHERE entity_id = ? ORDER BY submitted_date DESC
+        """,
+        [entity_id],
+    ).fetchall()
+    columns = ["document_id", "entity_id", "file_metadata", "integrity_score", "coherence_score",
+               "risk_flags", "composite_score", "submitted_date", "integrity_flags", "risk_score_raw"]
+    docs = [_row_to_score_out(dict(zip(columns, r))) for r in rows]
+    return DocumentListOut(entity_id=entity_id, total=len(docs), documents=docs)
 
 
 # ---------------------------------------------------------------------------
@@ -240,47 +298,39 @@ def list_entity_documents(entity_id: str, db: Session = Depends(get_db)) -> Docu
     response_model=EntityGraphOut,
     summary="Sous-graphe centré sur une entité",
 )
-def get_entity_graph(entity_id: str, db: Session = Depends(get_db)) -> EntityGraphOut:
-    """
-    Retourne les nœuds et arêtes directement liés à une entité.
-    Construit le graphe depuis les tables entity_graph_nodes/edges.
-    """
-    # Récupérer les arêtes impliquant l'entité
-    edges_a = db.query(EntityGraphEdge).filter(EntityGraphEdge.node_a == entity_id).all()
-    edges_b = db.query(EntityGraphEdge).filter(EntityGraphEdge.node_b == entity_id).all()
-    all_edges = edges_a + edges_b
+def get_entity_graph(entity_id: str, conn: duckdb.DuckDBPyConnection = Depends(get_db)) -> EntityGraphOut:
+    """Retourne les nœuds et arêtes directement liés à une entité."""
+    _sync_graph_from_entity_links(conn)
 
-    # Collecter les node_ids voisins
+    edges_rows = conn.execute(
+        "SELECT edge_id, node_a, node_b, edge_type, weight FROM entity_graph_edges "
+        "WHERE node_a = ? OR node_b = ?",
+        [entity_id, entity_id],
+    ).fetchall()
+
     neighbor_ids = {entity_id}
-    for e in all_edges:
-        neighbor_ids.add(e.node_a)
-        neighbor_ids.add(e.node_b)
+    for (_edge_id, a, b, _et, _w) in edges_rows:
+        neighbor_ids.add(a)
+        neighbor_ids.add(b)
 
-    # Récupérer les nœuds
-    nodes_orm = (
-        db.query(EntityGraphNode)
-        .filter(EntityGraphNode.node_id.in_(neighbor_ids))
-        .all()
-    )
+    placeholders = ", ".join("?" for _ in neighbor_ids)
+    nodes_rows = conn.execute(
+        f"SELECT node_id, feature_vector, gnn_anomaly_score FROM entity_graph_nodes "
+        f"WHERE node_id IN ({placeholders})",
+        list(neighbor_ids),
+    ).fetchall()
 
     nodes_out = [
         GraphNodeOut(
-            node_id           = n.node_id,
-            feature_vector    = n.feature_vector or [],
-            gnn_anomaly_score = gnn_anomaly_score(n.node_id),
+            node_id           = node_id,
+            feature_vector    = json.loads(fv) if fv else [],
+            gnn_anomaly_score = gnn_anomaly_score(node_id),
         )
-        for n in nodes_orm
+        for (node_id, fv, _gnn) in nodes_rows
     ]
-
     edges_out = [
-        GraphEdgeOut(
-            edge_id   = e.edge_id,
-            node_a    = e.node_a,
-            node_b    = e.node_b,
-            edge_type = EdgeTypeEnum(e.edge_type.value),
-            weight    = e.weight,
-        )
-        for e in all_edges
+        GraphEdgeOut(edge_id=eid, node_a=a, node_b=b, edge_type=EdgeTypeEnum(et), weight=w)
+        for (eid, a, b, et, w) in edges_rows
     ]
 
     return EntityGraphOut(entity_id=entity_id, nodes=nodes_out, edges=edges_out)
@@ -295,41 +345,34 @@ def get_entity_graph(entity_id: str, db: Session = Depends(get_db)) -> EntityGra
     response_model=List[GraphClusterOut],
     summary="Clusters d'entités détectés dans le graphe",
 )
-def get_clusters(db: Session = Depends(get_db)) -> List[GraphClusterOut]:
+def get_clusters(conn: duckdb.DuckDBPyConnection = Depends(get_db)) -> List[GraphClusterOut]:
     """
     Détecte et retourne les clusters (composantes connexes) du graphe complet.
     Indique le niveau de risque si au moins un nœud du cluster a un score > 0.7.
     """
-    # Charger toutes les arêtes et reconstruire le graphe NetworkX
-    all_edges_orm = db.query(EntityGraphEdge).all()
-    links = [
-        EntityLink(
-            entity_id_a      = e.node_a,
-            entity_id_b      = e.node_b,
-            shared_attribute = e.edge_type.value,
-            link_score       = e.weight,
-            edge_type        = e.edge_type.value,
-        )
-        for e in all_edges_orm
-    ]
+    _sync_graph_from_entity_links(conn)
 
-    if not links:
+    all_edges = conn.execute(
+        "SELECT node_a, node_b, edge_type, weight FROM entity_graph_edges"
+    ).fetchall()
+    if not all_edges:
         return []
 
+    links = [
+        EntityLink(entity_id_a=a, entity_id_b=b, shared_attribute=et, link_score=w, edge_type=et)
+        for (a, b, et, w) in all_edges
+    ]
     G        = build_graph(links)
     clusters = detect_clusters(G, min_size=2)
 
-    # Évaluer le risque par cluster : high si max(composite_score) > 0.7
     result = []
     for cluster in clusters:
-        docs_in_cluster = (
-            db.query(Document)
-            .filter(Document.entity_id.in_(cluster.entity_ids))
-            .all()
-        )
-        max_score = max(
-            (d.composite_score or 0.0 for d in docs_in_cluster), default=0.0
-        )
+        placeholders = ", ".join("?" for _ in cluster.entity_ids)
+        scores = conn.execute(
+            f"SELECT composite_score FROM documents WHERE entity_id IN ({placeholders})",
+            cluster.entity_ids,
+        ).fetchall()
+        max_score = max((s[0] or 0.0 for s in scores), default=0.0)
         risk_level = "high" if max_score > 0.7 else ("medium" if max_score > 0.4 else "low")
 
         result.append(GraphClusterOut(
@@ -351,35 +394,29 @@ def get_clusters(db: Session = Depends(get_db)) -> List[GraphClusterOut]:
     response_model=RescanOut,
     summary="Relancer le scoring complet d'un document existant",
 )
-def rescan_document(document_id: str, db: Session = Depends(get_db)) -> RescanOut:
-    """
-    Relit le document depuis la base, relance le pipeline de scoring complet,
-    et met à jour les scores persistés.
-    """
-    doc = db.query(Document).filter(Document.document_id == document_id).first()
-    if not doc:
+def rescan_document(document_id: str, conn: duckdb.DuckDBPyConnection = Depends(get_db)) -> RescanOut:
+    """Relit le document depuis la base, relance le pipeline de scoring complet,
+    et met à jour les scores persistés."""
+    row = _fetch_document(conn, document_id)
+    if row is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document {document_id!r} introuvable.",
         )
 
-    file_meta = doc.file_metadata or {}
-    historical = _get_entity_historical_amounts(doc.entity_id, db)
+    file_meta  = json.loads(row["file_metadata"]) if row["file_metadata"] else {}
+    historical = _get_entity_historical_amounts(row["entity_id"], conn)
 
-    # Reconstruire les paramètres de scoring depuis les métadonnées
     montant           = float(file_meta.get("montant", 0.0))
     nb_transactions   = int(file_meta.get("nb_transactions", 1))
     activite_declaree = float(file_meta.get("activite_declaree", 1.0))
-    declared_date_raw = file_meta.get("declared_date") or doc.submitted_date.isoformat()
+    declared_date_raw = file_meta.get("declared_date") or str(row["submitted_date"])
 
-    try:
-        from .integrity import _parse_dt
-        declared_date = _parse_dt(declared_date_raw) or doc.submitted_date
-    except Exception:
-        declared_date = doc.submitted_date
+    from .integrity import _parse_dt
+    declared_date = _parse_dt(declared_date_raw) or row["submitted_date"]
 
     cs = score_document(
-        entity_id         = doc.entity_id,
+        entity_id         = row["entity_id"],
         file_metadata     = file_meta,
         declared_date     = declared_date,
         montant           = montant,
@@ -387,17 +424,14 @@ def rescan_document(document_id: str, db: Session = Depends(get_db)) -> RescanOu
         activite_declaree = activite_declaree,
         historical_amounts= historical,
         document_id       = document_id,
-        submitted_date    = doc.submitted_date,
+        submitted_date    = row["submitted_date"],
     )
-    cs.gnn_anomaly_score = gnn_anomaly_score(doc.entity_id)
+    cs.gnn_anomaly_score = gnn_anomaly_score(row["entity_id"])
 
-    _persist_composite_score(cs, file_meta, db)
+    _persist_composite_score(cs, file_meta, conn)
 
     logger.info("Document %s re-scanné.", document_id)
-    return RescanOut(
-        document_id = document_id,
-        new_score   = _composite_to_score_out(cs),
-    )
+    return RescanOut(document_id=document_id, new_score=_composite_to_score_out(cs))
 
 
 # ---------------------------------------------------------------------------
@@ -408,30 +442,28 @@ def check_document_integrity(entity_id: str) -> dict:
     """
     Retourne le détail structuré du dernier score composite de l'entité.
 
-    Utilisée directement par les autres pipelines (pas d'HTTP).
-    Crée sa propre session SQLAlchemy.
-
-    Retourne un dict vide si l'entité n'a aucun document.
+    Utilisée directement par les autres pipelines (pas d'HTTP), sur la
+    connexion DuckDB partagée. Retourne un dict vide si l'entité n'a aucun
+    document.
     """
-    from .database import SessionLocal
+    from .database import get_connection
 
-    db  = SessionLocal()
+    conn = get_connection()
     try:
-        doc = (
-            db.query(Document)
-            .filter(Document.entity_id == entity_id)
-            .order_by(Document.submitted_date.desc())
-            .first()
-        )
-        if not doc:
+        row = conn.execute(
+            """
+            SELECT document_id, entity_id, file_metadata, integrity_score, coherence_score,
+                   risk_flags, composite_score, submitted_date, integrity_flags, risk_score_raw
+            FROM documents WHERE entity_id = ? ORDER BY submitted_date DESC LIMIT 1
+            """,
+            [entity_id],
+        ).fetchone()
+        if row is None:
             return {}
-
-        score_out = _orm_document_to_score_out(doc)
+        columns = ["document_id", "entity_id", "file_metadata", "integrity_score", "coherence_score",
+                   "risk_flags", "composite_score", "submitted_date", "integrity_flags", "risk_score_raw"]
+        score_out = _row_to_score_out(dict(zip(columns, row)))
         return score_out.model_dump(mode="json")
     except Exception as exc:
-        logger.error(
-            "check_document_integrity: erreur pour entity_id=%s : %s", entity_id, exc
-        )
+        logger.error("check_document_integrity: erreur pour entity_id=%s : %s", entity_id, exc)
         return {}
-    finally:
-        db.close()

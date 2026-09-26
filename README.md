@@ -41,34 +41,44 @@ contribuable (Youssef, simple et bienveillante, jamais accusatrice).
 - ✅ **Pipeline 3 — Accompagner** (Choch) : chatbot + agent d'investigation
   (tool-calling), backend DuckDB avec seeding de secours autonome.
 
-### ⚠️ Point d'intégration à résoudre avant la démo unifiée
+### ✅ Unification de la base de données (résolu)
 
-Les trois pipelines ont été développés en parallèle contre des hypothèses de
-persistance différentes — à trancher en équipe avant d'assembler la démo
-finale (cf. §14, "une seule base de données") :
+Les trois pipelines avaient été développés en parallèle contre des
+hypothèses de persistance différentes : Pipeline 2 sur SQLAlchemy/SQLite
+(`rakaba.db`), Pipeline 1 et 3 sur DuckDB mais avec des tables pivot au nom
+différent (`taxpayer_lifecycle` vs `entities`). Unifié : le schéma canonique
+vit dans [`pipeline1/db.py`](pipeline1/db.py) et couvre les tables des trois
+pipelines (`documents`, `entity_graph_nodes/edges` pour P2 ; `declarations`,
+`escalations` pour P3). Pipeline 2 a été porté de SQLAlchemy vers ce DuckDB
+partagé ; Pipeline 3 lit désormais `taxpayer_lifecycle`/`listings` au lieu
+d'une table `entities` redondante. Un correctif important au passage :
+l'ancien bootstrap de schéma de Pipeline 3 supprimait et recréait
+`entity_links`/`documents` dès qu'une seule table lui manquait — ce qui
+aurait effacé les données réelles de Pipeline 1 au premier lancement contre
+le fichier partagé. Vérifié par un test d'intégration bout-en-bout (P1 crée
+des entités et des liens réels → P2 les score et reconstruit son graphe
+depuis `entity_links` → P3 les lit via `consulter_entite`/`entites_liees` —
+rien n'est écrasé).
 
-| Pipeline | Moteur | Fichier | Table pivot |
-|---|---|---|---|
-| 1 | DuckDB (driver natif) | `rakaba.duckdb` | `taxpayer_lifecycle` |
-| 2 | SQLAlchemy ORM sur **SQLite** | `rakaba.db` | `documents` (FK logique non contrainte vers l'entité) |
-| 3 | DuckDB (driver natif) | `rakaba.duckdb` | attend une table `entities` |
-
-Deux écarts à résoudre : (a) Pipeline 2 cible un moteur différent (SQLite)
-de Pipelines 1 et 3 (DuckDB) ; (b) même entre 1 et 3, le nom de la table
-pivot diffère (`taxpayer_lifecycle` vs `entities`). `entity_links` est en
-revanche déjà cohérent entre les trois. Rien de bloquant individuellement —
-chaque pipeline tourne et teste en autonomie — mais la clé "une seule base
-partagée" (X1) n'est pas encore vraie tant que ce n'est pas aligné.
+⚠️ **Reste à faire** : Pipeline 2 (FastAPI) et Pipeline 3 (Flask) sont deux
+process séparés qui ouvriraient chacun `rakaba.duckdb` — DuckDB ne supporte
+qu'un seul process écrivain à la fois sur un même fichier. Le cahier des
+charges (§14) prévoit un seul backend ; les fusionner en un seul process
+(monter le WSGI Flask de P3 dans l'app FastAPI de P2, par exemple) n'est pas
+encore fait. Pour l'instant, ne pas lancer les deux services en même temps
+contre le même fichier.
 
 ## Stack technique
 
 - **Correspondance floue (P1)** : `rapidfuzz`
-- **Persistance (P1, P3)** : DuckDB — fichier local, zéro configuration
-- **Persistance (P2)** : SQLite via SQLAlchemy *(à réconcilier, voir ci-dessus)*
+- **Persistance (P1, P2, P3)** : DuckDB partagé — fichier local unique, zéro configuration
 - **Détection d'anomalie (P2)** : `scikit-learn` (Isolation Forest)
 - **Graphe et GNN (P2)** : `NetworkX`, PyTorch Geometric (GraphSAGE, optionnel)
 - **Backend (P2)** : FastAPI + Uvicorn
-- **IA conversationnelle et agent (P3)** : Claude (API Anthropic), tool-use
+- **Backend (P3)** : Flask
+- **IA conversationnelle et agent (P3)** : Grok (client compatible OpenAI), tool-use —
+  note : le cahier des charges (§13) prévoyait Claude/API Anthropic ; le code
+  actuel utilise Grok, à confirmer si c'est un choix définitif de l'équipe
 - **Frontend** : React ou HTML/JS selon le temps disponible
 
 Aucune donnée réelle : toutes les données (annonces, registre, documents)

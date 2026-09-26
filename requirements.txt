@@ -1,9 +1,10 @@
 # RAKABA — Pipeline 2 dépendances
 # Versions épinglées pour reproductibilité
+# (sqlalchemy retiré : Pipeline 2 utilise maintenant le DuckDB partage, voir pipeline2/database.py)
 
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
-sqlalchemy==2.0.30
+duckdb>=1.0
 pydantic==2.7.1
 
 # ML

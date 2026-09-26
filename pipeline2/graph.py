@@ -6,7 +6,7 @@ Fonctions :
   - build_graph          : construit un nx.Graph depuis une liste de liens
   - detect_clusters      : composantes connexes (fraude coordonnée)
   - get_entity_subgraph  : sous-graphe centré sur une entité
-  - graph_to_db_objects  : convertit le graphe en objets ORM pour persistance
+  - graph_to_db_rows     : convertit le graphe en lignes (dicts) prêtes à insérer en DuckDB
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 
-from .models import EdgeType, EntityGraphEdge, EntityGraphNode
+from .models import EdgeType
 
 logger = logging.getLogger(__name__)
 
@@ -179,16 +179,16 @@ def get_entity_subgraph(G: nx.Graph, entity_id: str, depth: int = 1) -> nx.Graph
 
 
 # ---------------------------------------------------------------------------
-# Conversion vers objets ORM (pour persistance)
+# Conversion vers lignes DB (dicts, pour persistance DuckDB)
 # ---------------------------------------------------------------------------
 
-def graph_to_db_objects(
+def graph_to_db_rows(
     G: nx.Graph,
     feature_vectors: Optional[Dict[str, List[float]]] = None,
-) -> Tuple[List[EntityGraphNode], List[EntityGraphEdge]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    Convertit un graphe NetworkX en listes d'objets ORM prêts à être
-    persistés via SQLAlchemy.
+    Convertit un graphe NetworkX en listes de lignes (dicts) prêtes à être
+    insérées dans entity_graph_nodes / entity_graph_edges (DuckDB).
 
     Paramètres
     ----------
@@ -197,33 +197,32 @@ def graph_to_db_objects(
 
     Retourne
     --------
-    (nodes, edges) — listes d'objets EntityGraphNode et EntityGraphEdge.
+    (node_rows, edge_rows) — listes de dicts avec les clés des colonnes.
     """
     fv = feature_vectors or {}
-    nodes: List[EntityGraphNode] = []
-    edges: List[EntityGraphEdge] = []
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
 
     for node_id in G.nodes():
-        nodes.append(EntityGraphNode(
-            node_id        = str(node_id),
-            feature_vector = fv.get(str(node_id), []),
-            gnn_anomaly_score = None,  # rempli plus tard par F2.7
-        ))
+        nodes.append({
+            "node_id"           : str(node_id),
+            "feature_vector"    : fv.get(str(node_id), []),
+            "gnn_anomaly_score" : None,  # rempli plus tard par F2.7
+        })
 
     for u, v, data in G.edges(data=True):
-        # Normalise le edge_type vers l'enum ORM
         raw_type = data.get("edge_type", "phone")
         try:
-            et = EdgeType(raw_type)
+            et = EdgeType(raw_type).value
         except ValueError:
-            et = EdgeType.phone
+            et = EdgeType.phone.value
 
-        edges.append(EntityGraphEdge(
-            edge_id   = str(uuid.uuid4()),
-            node_a    = str(u),
-            node_b    = str(v),
-            edge_type = et,
-            weight    = float(data.get("weight", 1.0)),
-        ))
+        edges.append({
+            "edge_id"   : str(uuid.uuid4()),
+            "node_a"    : str(u),
+            "node_b"    : str(v),
+            "edge_type" : et,
+            "weight"    : float(data.get("weight", 1.0)),
+        })
 
     return nodes, edges

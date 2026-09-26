@@ -5,19 +5,33 @@ The 4 investigation tools available to the Grok-powered investigation agent
 Each function takes an entity_id and returns a plain dict (JSON-serializable)
 straight from DuckDB. These are also the functions logged verbatim into the
 evidence_log so the frontend can show "why" a claim was made.
+
+Queries the real shared schema (Pipeline 1's taxpayer_lifecycle/listings/
+entity_links, Pipeline 2's documents) rather than a separate mock `entities`
+table - see db.py's module docstring for why.
 """
+
+import json
 
 import db
 
 
 def consulter_entite(entity_id: str) -> dict:
-    """Basic entity info + current risk score + lifecycle state."""
+    """Basic entity info + match score + lifecycle state.
+
+    `match_score` (0-100) is Pipeline 1's name/phone correspondence score,
+    not a calibrated fraud-risk score - it's the closest existing internal
+    signal (a low score means no credible match was found in the fiscal
+    registry, i.e. likely undeclared), surfaced honestly under its real name
+    rather than relabeled as something more precise than it is.
+    """
     rows = db.run(
         """
-        SELECT entity_id, name, entity_type, phone, address,
-               lifecycle_state, risk_score, created_at
-        FROM entities
-        WHERE entity_id = ?
+        SELECT tl.entity_id, l.business_name AS name, l.phone, l.location_text AS address,
+               tl.status AS lifecycle_state, tl.match_score, tl.notes, l.detected_date AS created_at
+        FROM taxpayer_lifecycle tl
+        JOIN listings l ON l.listing_id = tl.listing_id
+        WHERE tl.entity_id = ?
         """,
         [entity_id],
     )
@@ -32,15 +46,16 @@ def entites_liees(entity_id: str) -> dict:
     """Other entities sharing a phone number or address with this one."""
     rows = db.run(
         """
-        SELECT l.link_id, l.link_type, l.shared_value,
-               CASE WHEN l.entity_id_a = ? THEN l.entity_id_b ELSE l.entity_id_a END AS linked_entity_id,
-               e.name AS linked_entity_name,
-               e.lifecycle_state AS linked_entity_state,
-               e.risk_score AS linked_entity_risk_score
-        FROM entity_links l
-        JOIN entities e
-          ON e.entity_id = CASE WHEN l.entity_id_a = ? THEN l.entity_id_b ELSE l.entity_id_a END
-        WHERE l.entity_id_a = ? OR l.entity_id_b = ?
+        SELECT el.link_id, el.shared_attribute AS link_type, el.link_score,
+               CASE WHEN el.entity_id_a = ? THEN el.entity_id_b ELSE el.entity_id_a END AS linked_entity_id,
+               l.business_name AS linked_entity_name,
+               tl.status AS linked_entity_state,
+               tl.match_score AS linked_entity_match_score
+        FROM entity_links el
+        JOIN taxpayer_lifecycle tl
+          ON tl.entity_id = CASE WHEN el.entity_id_a = ? THEN el.entity_id_b ELSE el.entity_id_a END
+        JOIN listings l ON l.listing_id = tl.listing_id
+        WHERE el.entity_id_a = ? OR el.entity_id_b = ?
         """,
         [entity_id, entity_id, entity_id, entity_id],
     )
@@ -72,23 +87,44 @@ def historique_declaration(entity_id: str) -> dict:
 
 
 def verification_integrite(entity_id: str) -> dict:
-    """Document integrity/coherence flags for this entity's submitted documents."""
+    """Document integrity/coherence flags for this entity's submitted documents.
+
+    Reads Pipeline 2's real `documents` table. That table doesn't classify a
+    `doc_type` or store a single boolean flag/reason the way the original
+    mock schema did, so both are derived here: doc_type falls back to the
+    submitted filename, and a document counts as flagged if either its
+    integrity score took a hit or any risk rule fired on it.
+    """
     rows = db.run(
         """
-        SELECT document_id, doc_type, integrity_flag, flag_reason, submitted_at
+        SELECT document_id, file_metadata, integrity_score, integrity_flags,
+               risk_flags, composite_score, submitted_date
         FROM documents
         WHERE entity_id = ?
-        ORDER BY submitted_at
+        ORDER BY submitted_date
         """,
         [entity_id],
     )
-    for r in rows:
-        r["submitted_at"] = str(r["submitted_at"])
 
-    flagged = [r for r in rows if r["integrity_flag"]]
+    documents = []
+    for r in rows:
+        meta = json.loads(r["file_metadata"]) if r["file_metadata"] else {}
+        integrity_flags = json.loads(r["integrity_flags"]) if r["integrity_flags"] else []
+        risk_flags = json.loads(r["risk_flags"]) if r["risk_flags"] else []
+        all_flags = integrity_flags + risk_flags
+        documents.append({
+            "document_id": r["document_id"],
+            "doc_type": meta.get("filename", "document"),
+            "integrity_flag": len(all_flags) > 0,
+            "flag_reason": ", ".join(all_flags) if all_flags else None,
+            "composite_score": r["composite_score"],
+            "submitted_at": str(r["submitted_date"]),
+        })
+
+    flagged = [d for d in documents if d["integrity_flag"]]
     return {
         "entity_id": entity_id,
-        "documents": rows,
+        "documents": documents,
         "flagged_count": len(flagged),
         "flagged_documents": flagged,
     }

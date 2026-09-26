@@ -70,7 +70,10 @@ class RiskDetail(BaseModel):
     """Résultat détaillé de F2.4."""
     flags      : List[str] = Field(default_factory=list, description="Règles déclenchées")
     nb_flags   : int       = Field(0, ge=0)
-    risk_score : float     = Field(..., ge=0.0, le=1.0, description="Composante risque normalisée [0,1]")
+    # Non plafonné par construction (risk_rules.evaluate_risk documente ce champ
+    # comme = nb_flags brut) : scoring.py applique 0.25×nb_flags (capé à 1.0)
+    # au moment du calcul du score composite, pas ici.
+    risk_score : float     = Field(..., ge=0.0, description="Nombre de règles de risque déclenchées (brut, non normalisé)")
 
 
 # ---------------------------------------------------------------------------

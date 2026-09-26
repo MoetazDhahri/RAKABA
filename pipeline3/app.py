@@ -11,6 +11,7 @@ Access control is enforced in code (which columns are queried, which prompt
 is used, which tools exist per role) - never left to LLM instruction alone.
 """
 
+import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -45,9 +46,14 @@ def _client_status_label(lifecycle_state: str) -> str:
 
 
 def _fetch_client_safe_entity(entity_id: str):
-    """Only the fields a client is ever allowed to see. No risk_score, ever."""
+    """Only the fields a client is ever allowed to see. No match_score, ever."""
     rows = db.run(
-        "SELECT entity_id, name, lifecycle_state FROM entities WHERE entity_id = ?",
+        """
+        SELECT tl.entity_id, l.business_name AS name, tl.status AS lifecycle_state
+        FROM taxpayer_lifecycle tl
+        JOIN listings l ON l.listing_id = tl.listing_id
+        WHERE tl.entity_id = ?
+        """,
         [entity_id],
     )
     return rows[0] if rows else None
@@ -66,18 +72,25 @@ def _fetch_client_safe_declarations(entity_id: str):
 
 
 def _fetch_client_safe_documents(entity_id: str):
+    """Doc type isn't tracked by Pipeline 2's real schema, so it's derived
+    from the submitted filename - never the internal score, ever."""
     rows = db.run(
         """
-        SELECT doc_type, submitted_at
+        SELECT file_metadata, submitted_date AS submitted_at
         FROM documents
         WHERE entity_id = ?
-        ORDER BY submitted_at
+        ORDER BY submitted_date
         """,
         [entity_id],
     )
+    out = []
     for r in rows:
-        r["submitted_at"] = str(r["submitted_at"])
-    return rows
+        meta = json.loads(r["file_metadata"]) if r["file_metadata"] else {}
+        out.append({
+            "doc_type": meta.get("filename", "document"),
+            "submitted_at": str(r["submitted_at"]),
+        })
+    return out
 
 
 def _insert_escalation(entity_id: str, message: str, reason: str):
@@ -159,7 +172,7 @@ def investigate():
     if not inspector_id or not entity_id:
         return jsonify({"error": "inspector_id et entity_id sont requis"}), 400
 
-    existing = db.run("SELECT entity_id FROM entities WHERE entity_id = ?", [entity_id])
+    existing = db.run("SELECT entity_id FROM taxpayer_lifecycle WHERE entity_id = ?", [entity_id])
     if not existing:
         return jsonify({"error": f"Entite '{entity_id}' introuvable"}), 404
 
