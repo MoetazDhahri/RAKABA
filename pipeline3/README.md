@@ -1,8 +1,9 @@
 # RAKABA - Pipeline 3 (Chatbot backend)
 
 Flask backend for the RAKABA chatbot: one engine, two access-controlled
-scopes (client / admin), plus an autonomous investigation agent with
-explainable tool-calling. No frontend here.
+scopes (client / admin), a voice variant of each (ElevenLabs speech-to-text
++ text-to-speech), plus an autonomous investigation agent with explainable
+tool-calling. No frontend here.
 
 Two ways to run this: standalone (`app.py`, Flask, this directory) for
 independent dev/testing, or mounted into the unified backend
@@ -18,7 +19,7 @@ time isn't supported (DuckDB allows one writer process per file); pick one.
 cd pipeline3
 pip install -r requirements.txt
 cp .env.example .env
-# edit .env and set GROQ_API_KEY
+# edit .env and set GROQ_API_KEY and ELEVENLABS_API_KEY
 python app.py
 ```
 
@@ -62,6 +63,56 @@ Enforced in code, not just prompting:
   caller has already been authenticated/authorized as an inspector upstream
   (this backend takes `inspector_id` as a simple role flag, per the hackathon
   scope - wire in real auth later).
+
+## Voice (`/api/voice/chat/client`, `/api/voice/chat/admin`)
+
+Speaks and listens via ElevenLabs (Scribe for speech-to-text, the
+multilingual model for text-to-speech) as a thin layer in front of
+`chat_client`/`chat_admin` in `handlers.py` - **not** a separate path: every
+access-control and escalation rule above still applies to a voice turn
+exactly as it does to a typed one, since the transcribed text is handed to
+the exact same function.
+
+Request: `multipart/form-data` with `entity_id` (or `inspector_id`),
+optionally `conversation_history` (a JSON-encoded string, since form data has
+no native array type), and `audio` (the recorded clip - wav/mp3/webm/anything
+ElevenLabs' STT accepts). Response: the same JSON shape as the text endpoint,
+plus `transcript` (what was heard) and `audio_base64` + `audio_format` (the
+spoken reply, `mp3`). If synthesis fails, the response still carries the text
+`reply` with an `audio_error` field instead of losing the answer entirely.
+
+```bash
+curl -X POST http://localhost:5000/api/voice/chat/client \
+  -F "entity_id=<entity_id from Pipeline 1>" \
+  -F "audio=@question.mp3"
+```
+
+**Language**: both directions auto-detect from content - no language
+parameter to set, no dropdown to build. Verified directly against this
+project's own ElevenLabs account (not assumed from documentation):
+
+| Input | Detected as | Round-trip quality |
+|---|---|---|
+| French | `fra` | Exact |
+| English | `eng` | Exact |
+| Modern Standard Arabic (Arabic script) | `ara` | Exact |
+| Tunisian Derja, **Arabic script** (e.g. `أهلا، الملف متاعك تحت المراجعة توا`) | `ara` | Close - occasional dialectal-word substitution with a similar-sounding word from another Arabic dialect (`متاعك`→`بتاعك`, `توا`→`توّا`); meaning intact |
+| Tunisian Derja, **Latin transliteration / "Arabizi"** (e.g. `Ahla, el malaf mte3ek...`) | misdetected as `epo` (Esperanto) | Unusable - garbled |
+
+Practical takeaway: **the client must speak/write Derja in Arabic script**,
+not Arabizi, for this to work. There's no dedicated Tunisian dialect code in
+ElevenLabs' API - "Tunisian support" here means "Arabic support, which
+tolerates Tunisian vocabulary reasonably well when it's in Arabic script."
+This is worth knowing before promising judges perfect Tunisian voice
+support; it's good, not flawless.
+
+All voices on this account are tagged `language: en` (labels reflect the
+voice's original accent, not a hard restriction) - the default,
+`EXAVITQu4vr4xnSDxMaL` ("Sarah", reassuring/confident, fits the client
+persona's non-accusatory tone), speaks all three languages via the
+multilingual model but with a non-native accent in French/Arabic. Swap it
+via `ELEVENLABS_VOICE_ID` if your account has language-native voices you'd
+rather use.
 
 ## Getting an entity_id to test with
 
@@ -134,6 +185,7 @@ curl http://localhost:5000/api/escalations
 - `__init__.py` - sys.path bootstrap so this package's flat sibling-imports resolve when mounted from outside
 - `db.py` - DuckDB connection (shared file, shared schema from `pipeline1/db.py`) + declarations seeding
 - `groq_client.py` - Groq API wrapper (chat + tool-calling loop)
+- `voice.py` - ElevenLabs wrapper (speech-to-text via Scribe, text-to-speech via the multilingual model)
 - `tools.py` - the 4 investigation tools + JSON schemas
 - `escalation.py` - client-side keyword/intent classifier
 - `prompts.py` - system prompts for all three chatbot surfaces

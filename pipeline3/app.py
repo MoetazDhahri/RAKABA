@@ -8,12 +8,15 @@ process), see router.py instead - both call the same handlers.py so there's
 one source of truth for the actual logic.
 
 Two scopes, one engine:
-- /api/chat/client   -> restricted, entity-scoped, escalation-aware chatbot
-- /api/chat/admin    -> full-access Q&A chatbot for inspectors
-- /api/investigate   -> autonomous tool-calling investigation agent
-- /api/escalations   -> list flagged client questions for the admin dashboard
+- /api/chat/client         -> restricted, entity-scoped, escalation-aware chatbot
+- /api/chat/admin          -> full-access Q&A chatbot for inspectors
+- /api/voice/chat/client   -> same as /api/chat/client, spoken (ElevenLabs STT+TTS)
+- /api/voice/chat/admin    -> same as /api/chat/admin, spoken
+- /api/investigate         -> autonomous tool-calling investigation agent
+- /api/escalations         -> list flagged client questions for the admin dashboard
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -42,6 +45,38 @@ def chat_admin():
     body = request.get_json(silent=True) or {}
     result, code = handlers.chat_admin(
         body.get("inspector_id"), body.get("message"), body.get("conversation_history", [])
+    )
+    return jsonify(result), code
+
+
+def _parse_conversation_history(form) -> list:
+    raw = form.get("conversation_history")
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+
+
+@app.route("/api/voice/chat/client", methods=["POST"])
+def voice_chat_client():
+    audio = request.files.get("audio")
+    if audio is None:
+        return jsonify({"error": "Fichier audio 'audio' requis (multipart/form-data)"}), 400
+    result, code = handlers.voice_chat_client(
+        request.form.get("entity_id"), audio.read(), _parse_conversation_history(request.form)
+    )
+    return jsonify(result), code
+
+
+@app.route("/api/voice/chat/admin", methods=["POST"])
+def voice_chat_admin():
+    audio = request.files.get("audio")
+    if audio is None:
+        return jsonify({"error": "Fichier audio 'audio' requis (multipart/form-data)"}), 400
+    result, code = handlers.voice_chat_admin(
+        request.form.get("inspector_id"), audio.read(), _parse_conversation_history(request.form)
     )
     return jsonify(result), code
 

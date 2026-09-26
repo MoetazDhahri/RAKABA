@@ -16,11 +16,12 @@ Flask entry point) uses - one source of truth for the actual logic.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import APIRouter
+from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -57,6 +58,39 @@ def chat_client(payload: ClientChatIn) -> JSONResponse:
 @router.post("/api/chat/admin", summary="Chatbot interne pour inspecteurs")
 def chat_admin(payload: AdminChatIn) -> JSONResponse:
     result, code = handlers.chat_admin(payload.inspector_id, payload.message, payload.conversation_history)
+    return JSONResponse(content=result, status_code=code)
+
+
+def _parse_conversation_history(raw: Optional[str]) -> list:
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+
+
+@router.post("/api/voice/chat/client", summary="Chatbot contribuable, en voix (ElevenLabs STT+TTS)")
+async def voice_chat_client(
+    entity_id: str = Form(...),
+    conversation_history: Optional[str] = Form(None, description="JSON-encoded list, optional"),
+    audio: UploadFile = File(...),
+) -> JSONResponse:
+    result, code = handlers.voice_chat_client(
+        entity_id, await audio.read(), _parse_conversation_history(conversation_history)
+    )
+    return JSONResponse(content=result, status_code=code)
+
+
+@router.post("/api/voice/chat/admin", summary="Chatbot inspecteur, en voix (ElevenLabs STT+TTS)")
+async def voice_chat_admin(
+    inspector_id: str = Form(...),
+    conversation_history: Optional[str] = Form(None, description="JSON-encoded list, optional"),
+    audio: UploadFile = File(...),
+) -> JSONResponse:
+    result, code = handlers.voice_chat_admin(
+        inspector_id, await audio.read(), _parse_conversation_history(conversation_history)
+    )
     return JSONResponse(content=result, status_code=code)
 
 

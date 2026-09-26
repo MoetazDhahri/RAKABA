@@ -87,6 +87,10 @@ inconnue (404) — le tout dans le même process que les endpoints `/pipeline2/*
 - **IA conversationnelle et agent (P3)** : Groq (client compatible OpenAI), tool-use —
   note : le cahier des charges (§13) prévoyait Claude/API Anthropic ; le code
   actuel utilise Groq, à confirmer si c'est un choix définitif de l'équipe
+- **Voix (P3)** : ElevenLabs (speech-to-text + text-to-speech), français/anglais/arabe —
+  voir [`pipeline3/README.md`](pipeline3/README.md#voice-apivoicechatclient-apivoicechatadmin)
+  pour ce qui fonctionne vraiment en dialecte tunisien (script arabe oui, transcription
+  Arabizi non) et ce qui reste à valider
 - **Frontend** : React ou HTML/JS selon le temps disponible
 
 Aucune donnée réelle : toutes les données (annonces, registre, documents)

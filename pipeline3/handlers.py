@@ -13,8 +13,14 @@ Access control is enforced here, not just in prompting:
   state through a fixed mapping before it ever reaches the prompt.
 - A keyword/intent classifier (escalation.py) runs before any Groq call and
   short-circuits sensitive questions straight to a fixed escalation reply.
+
+Voice (voice_chat_client / voice_chat_admin) is a thin wrapper, not a
+parallel path: audio in -> ElevenLabs speech-to-text -> the exact same
+chat_client/chat_admin above -> ElevenLabs text-to-speech on the reply. Every
+safety rule above still applies to a voice turn.
 """
 
+import base64
 import json
 import logging
 import uuid
@@ -25,6 +31,7 @@ import db
 import escalation
 import prompts
 import tools
+import voice
 from groq_client import GroqAPIError, chat, run_tool_calling_loop
 
 logger = logging.getLogger(__name__)
@@ -160,6 +167,59 @@ def chat_admin(
         return {"error": str(exc)}, 502
 
     return {"reply": reply}, 200
+
+
+def _voice_reply(result: Dict[str, Any], code: int, transcript: str) -> Tuple[Dict[str, Any], int]:
+    """Shared tail end of both voice handlers: attach the transcript, and
+    synthesize audio for the reply if there is one. Synthesis failure
+    degrades to a text-only response rather than losing the chat reply
+    itself - the user still gets an answer, just not spoken."""
+    result["transcript"] = transcript
+    reply_text = result.get("reply")
+    if code == 200 and reply_text:
+        try:
+            audio_bytes = voice.synthesize(reply_text)
+            result["audio_base64"] = base64.b64encode(audio_bytes).decode("ascii")
+            result["audio_format"] = "mp3"
+        except voice.VoiceAPIError as exc:
+            result["audio_error"] = str(exc)
+    return result, code
+
+
+def voice_chat_client(
+    entity_id: Optional[str],
+    audio_bytes: bytes,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[Dict[str, Any], int]:
+    """Same access control and escalation logic as chat_client - this only
+    adds speech-to-text on the way in and text-to-speech on the way out."""
+    try:
+        transcript = voice.transcribe(audio_bytes)
+    except voice.VoiceAPIError as exc:
+        return {"error": str(exc)}, 502
+
+    if not transcript.strip():
+        return {"error": "Aucune parole detectee dans l'audio envoye"}, 400
+
+    result, code = chat_client(entity_id, transcript, conversation_history)
+    return _voice_reply(result, code, transcript)
+
+
+def voice_chat_admin(
+    inspector_id: Optional[str],
+    audio_bytes: bytes,
+    conversation_history: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[Dict[str, Any], int]:
+    try:
+        transcript = voice.transcribe(audio_bytes)
+    except voice.VoiceAPIError as exc:
+        return {"error": str(exc)}, 502
+
+    if not transcript.strip():
+        return {"error": "Aucune parole detectee dans l'audio envoye"}, 400
+
+    result, code = chat_admin(inspector_id, transcript, conversation_history)
+    return _voice_reply(result, code, transcript)
 
 
 def investigate(inspector_id: Optional[str], entity_id: Optional[str]) -> Tuple[Dict[str, Any], int]:
