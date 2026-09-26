@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useFetch } from "../api";
+import { documentRiskLabel, humanRiskFlag } from "../utils/presentation";
 
 const STATUSES = ["Detecte", "Contacte", "En regularisation", "Conforme", "Contribuable de confiance"];
 const STATUS_LABEL = {
@@ -14,7 +15,22 @@ function scoreColor(score) {
   if (score == null) return "#98a2b3";
   if (score >= 80) return "#279a63";
   if (score >= 40) return "#e8963a";
-  return "#e0473f";
+  return "#bc141f";
+}
+
+function matchLabel(score) {
+  if (score == null) return "Non évaluée";
+  if (score >= 80) return "Bonne correspondance";
+  if (score >= 40) return "À confirmer";
+  return "Correspondance faible";
+}
+
+function humanHistoryAction(action) {
+  return String(action || "")
+    .replace(/statut Detecte/gi, "dossier détecté")
+    .replace(/Aucune correspondance credible dans le registre fiscal/gi, "aucune correspondance confirmée dans le registre")
+    .replace(/Entite creee/gi, "Dossier créé")
+    .replace(/pour le signal ["“].+?["”]/gi, " après un signal détecté");
 }
 
 export default function EntityDrawer({ entityId, onClose, onInvestigate, onJumpTo }) {
@@ -51,23 +67,23 @@ export default function EntityDrawer({ entityId, onClose, onInvestigate, onJumpT
 
         {detail && (
           <>
-            <div className="drawer-header">
+            <div className="drawer-header drawer-hero">
               <div>
                 <div className="drawer-title">{detail.business_name}</div>
-                <div className="drawer-subtitle">{detail.entity_id} · {STATUS_LABEL[detail.status] || detail.status}</div>
+                <span className={`drawer-status drawer-status--${detail.status === "Conforme" || detail.status === "Contribuable de confiance" ? "done" : "review"}`}>{STATUS_LABEL[detail.status] || detail.status}</span>
               </div>
               <button className="drawer-close" type="button" onClick={onClose}>&times;</button>
             </div>
 
-            <div className="drawer-section">
-              <div className="drawer-section-title">Correspondance registre (F1.3)</div>
+            <div className="drawer-section drawer-section--highlight">
+              <div className="drawer-section-title">Correspondance avec le registre</div>
               <div className="score-bar-row">
-                <div className="score-bar-label"><span>Score de correspondance</span><strong>{detail.match_score?.toFixed(1) ?? "—"}</strong></div>
+                <div className="score-bar-label"><span>Niveau de rapprochement</span><strong>{matchLabel(detail.match_score)}</strong></div>
                 <div className="score-bar-track">
                   <div className="score-bar-fill" style={{ width: `${Math.min(100, detail.match_score || 0)}%`, background: scoreColor(detail.match_score) }} />
                 </div>
               </div>
-              {detail.notes && <div className="drawer-subtitle">{detail.notes}</div>}
+              {detail.notes && <div className="drawer-subtitle">{humanHistoryAction(detail.notes)}</div>}
             </div>
 
             <div className="drawer-section">
@@ -82,11 +98,11 @@ export default function EntityDrawer({ entityId, onClose, onInvestigate, onJumpT
 
             {links && links.length > 0 && (
               <div className="drawer-section">
-                <div className="drawer-section-title">Entités liées (F1.6)</div>
+                <div className="drawer-section-title">Entités liées</div>
                 <div className="chip-row">
                   {links.map((l) => (
                     <span key={l.entity_id} className="chip chip--link" onClick={() => onJumpTo(l.entity_id)}>
-                      {l.entity_id} · {l.shared_attribute}
+                      {l.business_name || "Entité liée"} · {l.shared_attribute === "phone" ? "téléphone partagé" : "adresse partagée"}
                     </span>
                   ))}
                 </div>
@@ -94,7 +110,7 @@ export default function EntityDrawer({ entityId, onClose, onInvestigate, onJumpT
             )}
 
             <div className="drawer-section">
-              <div className="drawer-section-title">Documents (Pipeline 2)</div>
+              <div className="drawer-section-title">Documents analysés</div>
               {!docs || docs.total === 0 ? (
                 <p className="drawer-subtitle">Aucun document soumis pour le moment.</p>
               ) : (
@@ -109,7 +125,7 @@ export default function EntityDrawer({ entityId, onClose, onInvestigate, onJumpT
                           color: doc.composite_score > 0.7 ? "var(--danger)" : doc.composite_score > 0.4 ? "#a56418" : "var(--success)",
                         }}
                       >
-                        composite {doc.composite_score?.toFixed(2)}
+                        Risque documentaire : {documentRiskLabel(doc.composite_score)}
                       </span>
                     </div>
                     <div className="score-bar-row">
@@ -122,7 +138,7 @@ export default function EntityDrawer({ entityId, onClose, onInvestigate, onJumpT
                     </div>
                     {(doc.integrity.flags.length > 0 || doc.risk.flags.length > 0) && (
                       <div className="chip-row">
-                        {[...doc.integrity.flags, ...doc.risk.flags].map((f, i) => <span className="chip" key={i}>{f}</span>)}
+                        {[...doc.integrity.flags, ...doc.risk.flags].map((f, i) => <span className="chip" key={i}>{humanRiskFlag(f)}</span>)}
                       </div>
                     )}
                   </div>
@@ -138,7 +154,7 @@ export default function EntityDrawer({ entityId, onClose, onInvestigate, onJumpT
                     <div className="timeline-row" key={h.log_id}>
                       <span className={`timeline-dot ${h.triggered_by === "human" ? "timeline-dot--human" : ""}`} />
                       <div className="timeline-text">
-                        {h.action_description}
+                        {humanHistoryAction(h.action_description)}
                         <div className="timeline-meta">{new Date(h.timestamp).toLocaleString("fr-FR")} · {h.triggered_by === "human" ? "Manuel" : "Automatique"}</div>
                       </div>
                     </div>
@@ -148,9 +164,9 @@ export default function EntityDrawer({ entityId, onClose, onInvestigate, onJumpT
             )}
 
             <div className="drawer-section">
-              <div className="drawer-section-title">Actions (F1.8)</div>
+              <div className="drawer-section-title">Prochaine action</div>
               <div className="form-row">
-                <label htmlFor="new-status">Forcer le statut</label>
+                <label htmlFor="new-status">Mettre à jour le statut</label>
                 <select id="new-status" className="select" value={newStatus} onChange={(e) => setNewStatus(e.target.value)}>
                   <option value="">— choisir —</option>
                   {STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
@@ -165,7 +181,7 @@ export default function EntityDrawer({ entityId, onClose, onInvestigate, onJumpT
                 <button className="btn btn-primary" type="button" disabled={!newStatus || submitting} onClick={handleTransition}>
                   {submitting ? "…" : "Appliquer"}
                 </button>
-                <button className="btn" type="button" onClick={() => onInvestigate(entityId)}>Enquêter</button>
+                <button className="btn" type="button" onClick={() => onInvestigate(entityId)}>Ouvrir l’analyse</button>
               </div>
             </div>
           </>

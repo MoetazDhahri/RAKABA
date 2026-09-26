@@ -32,14 +32,14 @@ export default function EvolutionChart({ evolution }) {
     <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%" height={HEIGHT} role="img" aria-label="Évolution des détections sur 7 jours">
       <defs>
         <linearGradient id="evoFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#2d5fdb" stopOpacity="0.22" />
-          <stop offset="100%" stopColor="#2d5fdb" stopOpacity="0" />
+          <stop offset="0%" stopColor="#132130" stopOpacity="0.22" />
+          <stop offset="100%" stopColor="#132130" stopOpacity="0" />
         </linearGradient>
       </defs>
       <path d={areaPath} fill="url(#evoFill)" />
-      <path d={linePath} fill="none" stroke="#2d5fdb" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d={linePath} fill="none" stroke="#132130" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
       {points.map((p, i) => (
-        <circle key={i} cx={p.x} cy={p.y} r="3.2" fill="#2d5fdb" stroke="white" strokeWidth="1.2" />
+        <circle key={i} cx={p.x} cy={p.y} r="3.2" fill="#132130" stroke="white" strokeWidth="1.2" />
       ))}
       {points.map((p, i) => (
         <text key={`t-${i}`} x={p.x} y={HEIGHT - 4} textAnchor="middle" fontSize="9.5" fill="#98a2b3">

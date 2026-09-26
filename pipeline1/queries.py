@@ -12,6 +12,7 @@ from datetime import date
 
 import duckdb
 
+from pipeline1.dashboard import match_governorate
 from pipeline1.pipeline import (
     LIFECYCLE_ORDER,
     STATUS_COMPLIANT,
@@ -20,8 +21,22 @@ from pipeline1.pipeline import (
 )
 
 
-def list_entities_by_status(conn: duckdb.DuckDBPyConnection, status: str | None = None) -> list[dict]:
-    """Kanban cards (Ecran 1). One row per entity, with the listing info needed for the card."""
+def list_entities_by_status(
+    conn: duckdb.DuckDBPyConnection,
+    status: str | None = None,
+    search: str | None = None,
+    location_filter: str | None = None,
+) -> list[dict]:
+    """Kanban cards (Ecran 1). One row per entity, with the listing info needed for the card.
+
+    `location_filter` is a governorate id (e.g. "gabes", "sidi-bouzid" - the
+    same ids the map/dashboard.region_breakdown uses), matched via the same
+    match_governorate() heuristic rather than a raw ILIKE substring on the
+    accented display name - otherwise a click on "Gabès"/"Béja"/"Kébili"/
+    etc. would silently match nothing (ILIKE does not fold accents), and the
+    result set here could disagree with the map's own bucket count for the
+    same region.
+    """
     query = """
         SELECT tl.entity_id, tl.status, tl.status_updated_at, tl.match_score, tl.notes,
                l.business_name, l.phone, l.location_text, l.source_platform, l.detected_date
@@ -29,15 +44,28 @@ def list_entities_by_status(conn: duckdb.DuckDBPyConnection, status: str | None 
         JOIN listings l ON l.listing_id = tl.listing_id
     """
     params = []
+    filters = []
     if status is not None:
-        query += " WHERE tl.status = ?"
+        filters.append("tl.status = ?")
         params.append(status)
+    if search:
+        filters.append(
+            "(l.business_name ILIKE ? OR l.phone ILIKE ? OR l.location_text ILIKE ? "
+            "OR l.activity_description ILIKE ? OR l.source_platform ILIKE ? "
+            "OR tl.status ILIKE ? OR tl.notes ILIKE ?)"
+        )
+        params.extend([f"%{search}%"] * 7)
+    if filters:
+        query += " WHERE " + " AND ".join(filters)
     query += " ORDER BY tl.status_updated_at DESC"
 
     rows = conn.execute(query, params).fetchall()
     columns = ["entity_id", "status", "status_updated_at", "match_score", "notes",
                "business_name", "phone", "location_text", "source_platform", "detected_date"]
-    return [dict(zip(columns, row)) for row in rows]
+    entities = [dict(zip(columns, row)) for row in rows]
+    if location_filter:
+        entities = [e for e in entities if match_governorate(e["location_text"]) == location_filter]
+    return entities
 
 
 def kanban_columns(conn: duckdb.DuckDBPyConnection) -> dict[str, list[dict]]:

@@ -12,8 +12,53 @@ table - see db.py's module docstring for why.
 """
 
 import json
+from datetime import datetime, timedelta
 
 import db
+
+
+def rechercher_entite(query: str) -> dict:
+    """Find dossiers by business name without requiring a foreign identifier."""
+    query = (query or "").strip()
+    if not query:
+        return {"matches": [], "count": 0}
+    rows = db.run(
+        """
+        SELECT tl.entity_id, l.business_name AS name, l.location_text AS location,
+               tl.status, tl.status_updated_at
+        FROM taxpayer_lifecycle tl
+        JOIN listings l ON l.listing_id = tl.listing_id
+        WHERE lower(l.business_name) LIKE lower(?)
+        ORDER BY tl.status_updated_at DESC
+        LIMIT 10
+        """,
+        [f"%{query}%"],
+    )
+    for row in rows:
+        row["status_updated_at"] = str(row["status_updated_at"])
+    return {"matches": rows, "count": len(rows)}
+
+
+def detections_recentes(days: int = 7, limit: int = 10) -> dict:
+    """Return recent detected businesses for a natural follow-up discussion."""
+    days = max(1, min(int(days), 30))
+    limit = max(1, min(int(limit), 25))
+    since = datetime.now() - timedelta(days=days)
+    rows = db.run(
+        """
+        SELECT l.business_name AS name, l.location_text AS location,
+               tl.status, tl.status_updated_at AS detected_at, tl.notes
+        FROM taxpayer_lifecycle tl
+        JOIN listings l ON l.listing_id = tl.listing_id
+        WHERE tl.status = 'Detecte' AND tl.status_updated_at >= ?
+        ORDER BY tl.status_updated_at DESC
+        LIMIT ?
+        """,
+        [since, limit],
+    )
+    for row in rows:
+        row["detected_at"] = str(row["detected_at"])
+    return {"period_days": days, "detections": rows, "count": len(rows)}
 
 
 def consulter_entite(entity_id: str) -> dict:
@@ -131,6 +176,8 @@ def verification_integrite(entity_id: str) -> dict:
 
 
 TOOL_REGISTRY = {
+    "rechercher_entite": rechercher_entite,
+    "detections_recentes": detections_recentes,
     "consulter_entite": consulter_entite,
     "entites_liees": entites_liees,
     "historique_declaration": historique_declaration,
@@ -139,6 +186,33 @@ TOOL_REGISTRY = {
 
 
 TOOLS_SCHEMA = [
+    {
+        "type": "function",
+        "function": {
+            "name": "rechercher_entite",
+            "description": "Recherche un dossier tunisien par nom d'entreprise ou d'activité. Ne demande pas de SIREN ou SIRET.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Nom ou partie du nom de l'entreprise"}},
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "detections_recentes",
+            "description": "Liste les entreprises detectees recemment pour pouvoir les presenter et les discuter une par une.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "days": {"type": "integer", "description": "Nombre de jours a regarder, entre 1 et 30"},
+                    "limit": {"type": "integer", "description": "Nombre maximum de resultats, entre 1 et 25"},
+                },
+                "required": [],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {

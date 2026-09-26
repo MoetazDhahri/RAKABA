@@ -287,6 +287,37 @@ dans ce cas. Ce type de fraude reste du ressort de F2.3 (l'Isolation Forest
 verra un montant statistiquement improbable) ou de la vérification structurelle
 PDF ci-dessus si l'édition est passée par un logiciel PDF.
 
+### OCR — lecture des factures photographiées, y compris manuscrites (`ocr.py`)
+
+`/documents/intake` cherchait le dossier correspondant en comparant le nom du
+fichier et le texte d'un PDF à la liste des entreprises — mais une facture
+**photographiée** (la seule façon dont une facture manuscrite peut arriver)
+n'a pas de calque de texte du tout, donc ce chemin ne trouvait jamais rien
+pour une image. `ocr.py` ferme cet écart avec Tesseract (moteur OCR local,
+gratuit, pas de nouvelle clé API) : toute image uploadée (et toute page PDF
+scannée sans calque de texte) passe maintenant par l'OCR avant la recherche
+de dossier.
+
+**Ce qui marche bien** : texte imprimé — nom d'entreprise, montants imprimés,
+en-têtes de facture, même sur une photo. **Ce qui ne marche pas de façon
+fiable** : l'écriture cursive manuscrite elle-même. Tesseract est un moteur
+OCR pour texte imprimé ; aucun moteur OCR local gratuit ne lit l'écriture
+manuscrite de façon fiable. Un modèle de langage avec entrée image (vision)
+ferait bien mieux, mais le compte Groq actuel n'en expose aucun (vérifié en
+listant `/v1/models` : uniquement des modèles de chat texte, Whisper pour la
+voix, Orpheus pour la synthèse — pas de modèle avec entrée image). Donc :
+une facture avec des champs imprimés (nom, montant tapé) sera bien
+retrouvée automatiquement ; une facture entièrement manuscrite le sera de
+façon moins fiable, et le champ montant devra probablement être corrigé à la
+main par l'inspecteur — ce qui reste possible via les "Paramètres
+complémentaires" du formulaire d'analyse.
+
+Se désactive proprement (texte vide, pas d'erreur) si `pytesseract` ou le
+binaire Tesseract lui-même ne sont pas installés sur une machine donnée —
+voir `requirements.txt` pour l'installer. Les données de langue (français,
+anglais, arabe) sont fournies dans `pipeline2/tessdata/` pour ne pas dépendre
+de ce qui est installé système par système.
+
 ### F2.3 — Isolation Forest
 - Features : montant normalisé, écart à l'historique, nb transactions, ratio montant/activité
 - `contamination=0.08`, `random_state=42`

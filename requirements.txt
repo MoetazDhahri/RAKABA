@@ -21,6 +21,13 @@ pypdf>=4.0
 pymupdf>=1.24
 Pillow>=10.0
 
+# OCR (photos de factures, y compris manuscrites - voir pipeline2/ocr.py pour
+# ce qui est fiable ou non). Necessite aussi le moteur Tesseract lui-meme
+# (binaire natif, pas seulement ce paquet Python) : sur Windows,
+# `winget install --id UB-Mannheim.TesseractOCR -e`. Sans le binaire, l'OCR
+# se desactive proprement (extraction de texte vide, pas d'erreur).
+pytesseract>=0.3.10
+
 # GNN (optionnel — commenter si PyTorch non disponible)
 # torch==2.3.0
 # torch-geometric==2.5.3

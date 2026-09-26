@@ -46,9 +46,14 @@ def lifecycle_statuses() -> list:
     return pipeline.LIFECYCLE_ORDER
 
 
-@router.get("/entities", summary="Liste des entites, filtrable par statut")
-def list_entities(status_filter: Optional[str] = None, conn: duckdb.DuckDBPyConnection = Depends(get_db)) -> list:
-    return queries.list_entities_by_status(conn, status_filter)
+@router.get("/entities", summary="Liste des dossiers, filtrable et recherchable")
+def list_entities(
+    status_filter: Optional[str] = None,
+    search: Optional[str] = None,
+    location_filter: Optional[str] = None,
+    conn: duckdb.DuckDBPyConnection = Depends(get_db),
+) -> list:
+    return queries.list_entities_by_status(conn, status_filter, search, location_filter)
 
 
 @router.get("/entities/{entity_id}", summary="Detail d'une entite (score, historique)")

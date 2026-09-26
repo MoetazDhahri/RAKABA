@@ -86,14 +86,18 @@ def get_related_entities(conn: duckdb.DuckDBPyConnection, entity_id: str) -> lis
     """Used by Pipeline 3's investigation agent (get_related_entities tool)."""
     rows = conn.execute(
         """
-        SELECT entity_id_a, entity_id_b, shared_attribute, link_score
-        FROM entity_links
-        WHERE entity_id_a = ? OR entity_id_b = ?
+        SELECT el.entity_id_a, el.entity_id_b, el.shared_attribute, el.link_score,
+               l.business_name
+        FROM entity_links el
+        JOIN taxpayer_lifecycle tl
+          ON tl.entity_id = CASE WHEN el.entity_id_a = ? THEN el.entity_id_b ELSE el.entity_id_a END
+        JOIN listings l ON l.listing_id = tl.listing_id
+        WHERE el.entity_id_a = ? OR el.entity_id_b = ?
         """,
-        [entity_id, entity_id],
+        [entity_id, entity_id, entity_id],
     ).fetchall()
     related = []
-    for a, b, attribute, score in rows:
+    for a, b, attribute, score, business_name in rows:
         other = b if a == entity_id else a
-        related.append({"entity_id": other, "shared_attribute": attribute, "link_score": score})
+        related.append({"entity_id": other, "business_name": business_name, "shared_attribute": attribute, "link_score": score})
     return related

@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import unicodedata
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -34,7 +36,8 @@ import duckdb
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from .database  import get_db
-from .document_forensics import analyze_document_bytes
+from .document_forensics import analyze_document_bytes, render_pdf_pages_to_images
+from .ocr       import extract_text_from_image
 from .graph     import (
     EntityLink,
     build_graph, detect_clusters, get_entity_subgraph, graph_to_db_rows,
@@ -51,6 +54,115 @@ from .scoring   import score_document, CompositeScore
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/pipeline2", tags=["Pipeline 2 — Vérifier"])
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
+
+def _normalize_document_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFD", value.lower())
+    return "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+
+
+def _extract_document_text(file_bytes: bytes, filename: str) -> str:
+    """Extract a small searchable text sample for dossier suggestions.
+
+    This is a matching aid only. The scoring pipeline still requires a human
+    confirmation when the document does not identify one clear business.
+
+    PDFs use their embedded text layer (fast, exact). A photographed
+    document - which is exactly what a scanned/photographed facture is, and
+    the only way a handwritten one can arrive - has no text layer at all, so
+    it falls through to Tesseract OCR instead (pipeline2/ocr.py). OCR reads
+    printed invoice fields (business name, printed amounts) reasonably well;
+    genuine cursive handwriting is not reliably recognized by any free local
+    OCR engine - see ocr.py's module docstring for why, and what it would
+    take to do better.
+    """
+    if filename.lower().endswith(".pdf"):
+        try:
+            import pymupdf
+
+            document = pymupdf.open(stream=file_bytes, filetype="pdf")
+            try:
+                text = "\n".join(
+                    document[index].get_text()
+                    for index in range(min(3, document.page_count))
+                )[:12000]
+            finally:
+                document.close()
+            if text.strip():
+                return text
+        except Exception:
+            pass
+
+        # No embedded text layer (a scanned PDF, i.e. a photographed page
+        # saved as PDF) - render the first page to an image and OCR that,
+        # same as a plain photographed image would get below.
+        try:
+            pages = render_pdf_pages_to_images(file_bytes, max_pages=1)
+            if pages:
+                return extract_text_from_image(pages[0])[:12000]
+        except Exception:
+            pass
+        return ""
+
+    try:
+        import io
+
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(file_bytes))
+        return extract_text_from_image(image)[:12000]
+    except Exception:
+        return ""
+
+
+def _find_document_candidates(conn: duckdb.DuckDBPyConnection, filename: str, extracted_text: str) -> list[dict[str, Any]]:
+    searchable = _normalize_document_text(f"{filename} {extracted_text}")
+    rows = conn.execute(
+        """
+        SELECT tl.entity_id, l.business_name, l.location_text
+        FROM taxpayer_lifecycle tl
+        JOIN listings l ON l.listing_id = tl.listing_id
+        """
+    ).fetchall()
+    candidates = []
+    for entity_id, business_name, location_text in rows:
+        name = _normalize_document_text(business_name)
+        tokens = [token for token in re.findall(r"[a-z0-9]+", name) if len(token) > 2]
+        matches = [token for token in tokens if token in searchable]
+        if not matches:
+            continue
+        confidence = min(0.98, 0.45 + (len(matches) / max(len(tokens), 1)) * 0.5)
+        candidates.append({
+            "entity_id": entity_id,
+            "business_name": business_name,
+            "location": location_text,
+            "confidence": round(confidence, 2),
+            "matched_on": matches,
+        })
+    return sorted(candidates, key=lambda candidate: candidate["confidence"], reverse=True)[:5]
+
+
+@router.post("/documents/intake", summary="Préparer l'analyse d'un document sans dossier préalable")
+async def intake_document(
+    file: UploadFile = File(...),
+    conn: duckdb.DuckDBPyConnection = Depends(get_db),
+) -> dict:
+    file_bytes = await file.read()
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Le fichier dépasse la taille maximale de 15 Mo.")
+    filename = file.filename or "document"
+    forensics = analyze_document_bytes(file_bytes, filename)
+    extracted_text = _extract_document_text(file_bytes, filename)
+    candidates = _find_document_candidates(conn, filename, extracted_text)
+    return {
+        "filename": filename,
+        "file_type": file.content_type or "application/octet-stream",
+        "text_detected": bool(extracted_text.strip()),
+        "candidates": candidates,
+        "forensics": forensics.to_dict(),
+        "requires_confirmation": len(candidates) != 1 or candidates[0]["confidence"] < 0.8,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +400,8 @@ async def upload_document_file(
 
     doc_id = str(uuid.uuid4())
     file_bytes = await file.read()
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Le fichier dépasse la taille maximale de 15 Mo.")
     filename = file.filename or "document"
 
     forensics = analyze_document_bytes(file_bytes, filename)

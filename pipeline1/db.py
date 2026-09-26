@@ -34,7 +34,23 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "rakaba.duckdb"
 # Admin frontend intermittently returned wrong/empty results even though the
 # same query succeeded a moment later run in isolation - a real bug caught by
 # testing the actual UI under concurrent load, not a hypothetical.
-LOCK = threading.RLock()
+#
+# Plain Lock, not RLock: pipeline1/router.py's and pipeline2/database.py's
+# `get_db()` FastAPI dependencies do `with LOCK: yield conn` - a sync
+# generator dependency, which FastAPI/Starlette runs via
+# `contextmanager_in_threadpool`, executing the pre-yield (`__enter__`) and
+# post-yield (`__exit__`) halves as two separate `anyio.to_thread.run_sync`
+# calls that are NOT guaranteed to land on the same worker thread. RLock
+# tracks its owning thread and raises `RuntimeError: cannot release an
+# un-acquired lock` the moment acquire/release happen on different threads -
+# which crashed the entire uvicorn worker process outright the first time it
+# happened under real concurrent traffic (reproduced, not hypothetical).
+# Plain Lock has no owning-thread check, so any thread may release what
+# another thread acquired. The one thing RLock bought - the same thread
+# re-entering the lock it already holds - doesn't happen anywhere in this
+# codebase's actual call paths (pipeline3's own per-query lock use never runs
+# inside a request that is also holding this lock for its whole duration).
+LOCK = threading.Lock()
 
 SCHEMA_STATEMENTS = [
     """
@@ -141,11 +157,40 @@ SCHEMA_STATEMENTS = [
         reason        VARCHAR
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS assistant_conversations (
+        conversation_id  VARCHAR PRIMARY KEY,
+        inspector_id     VARCHAR NOT NULL,
+        context_entity_id VARCHAR,
+        messages         VARCHAR NOT NULL,
+        updated_at       TIMESTAMP NOT NULL DEFAULT current_timestamp
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS client_accounts (
+        account_id       VARCHAR PRIMARY KEY,
+        email            VARCHAR UNIQUE NOT NULL,
+        password_hash    VARCHAR NOT NULL,
+        entity_id        VARCHAR UNIQUE NOT NULL,
+        created_at       TIMESTAMP NOT NULL DEFAULT current_timestamp,
+        active           BOOLEAN NOT NULL DEFAULT TRUE
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS client_sessions (
+        session_id       VARCHAR PRIMARY KEY,
+        account_id       VARCHAR NOT NULL,
+        token_hash       VARCHAR UNIQUE NOT NULL,
+        expires_at       TIMESTAMP NOT NULL,
+        created_at       TIMESTAMP NOT NULL DEFAULT current_timestamp
+    );
+    """,
 ]
 
 _ALL_TABLES = (
     "entity_graph_edges", "entity_graph_nodes", "documents",
-    "escalations", "declarations",
+    "escalations", "declarations", "assistant_conversations",
+    "client_sessions", "client_accounts",
     "entity_links", "taxpayer_lifecycle", "listings", "registry", "automation_log",
 )
 

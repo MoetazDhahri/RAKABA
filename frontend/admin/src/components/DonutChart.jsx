@@ -1,5 +1,5 @@
 const SEGMENTS = [
-  { key: "decouvrir", label: "Découvrir", color: "#2d5fdb" },
+  { key: "decouvrir", label: "Découvrir", color: "#132130" },
   { key: "verifier", label: "Vérifier", color: "#e8963a" },
   { key: "accompagner", label: "Accompagner", color: "#279a63" },
 ];
@@ -42,7 +42,7 @@ export default function DonutChart({ distribution }) {
           return el;
         })}
         <text x={SIZE / 2} y={SIZE / 2 - 6} textAnchor="middle" fontSize="22" fontWeight="800" fill="#16213a">{total}</text>
-        <text x={SIZE / 2} y={SIZE / 2 + 14} textAnchor="middle" fontSize="10.5" fill="#98a2b3">activités</text>
+        <text x={SIZE / 2} y={SIZE / 2 + 14} textAnchor="middle" fontSize="10.5" fill="#98a2b3">éléments</text>
       </svg>
       <div className="donut-legend">
         {SEGMENTS.map((s) => (

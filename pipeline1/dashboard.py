@@ -158,13 +158,13 @@ def region_breakdown(conn: duckdb.DuckDBPyConnection) -> List[Dict[str, Any]]:
 
     for entity_id, status, _updated, _name, location_text, _match in entities:
         gid = match_governorate(location_text) or "non-attribue"
-        bucket = buckets.setdefault(gid, {"total": 0, "eleve": 0, "moyen": 0, "faible": 0, "traite": 0})
+        bucket = buckets.setdefault(gid, {"total": 0, "eleve": 0, "moyen": 0, "faible": 0, "non_evalue": 0, "traite": 0})
         bucket["total"] += 1
         if status in CONFORME_STATUSES:
             bucket["traite"] += 1
         else:
             level = _risk_level(max_scores.get(entity_id))
-            bucket[level if level in ("eleve", "moyen", "faible") else "faible"] += 1
+            bucket[level if level in ("eleve", "moyen", "faible") else "non_evalue"] += 1
 
     result = [
         {
@@ -195,10 +195,10 @@ def _classify_log_entry(description: str) -> Optional[tuple]:
 
 
 _ALERT_LABELS = {
-    "reseau_fraude": "Risque de fraude organisée détecté",
+    "reseau_fraude": "Réseau d’entités liées détecté",
     "declaration_incoherente": "Déclaration incohérente",
     "activite_non_declaree": "Activité non déclarée détectée",
-    "document_suspect": "Document suspect",
+    "document_suspect": "Document à examiner",
 }
 
 

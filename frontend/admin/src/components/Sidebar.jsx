@@ -41,28 +41,27 @@ const FEATURE_ITEMS = [
   { id: "journal", title: "Journal d'automatisation", icon: <><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" /></> },
 ];
 
-export default function Sidebar({ activeView, onNavigate }) {
+function initials(name) {
+  return (name || "?")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join("");
+}
+
+export default function Sidebar({ activeView, onNavigate, inspectorName }) {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <div className="brand-mark">
-          <svg viewBox="0 0 24 24" fill="none">
-            <path d="M12 2 L21 6 V12 C21 17 17 21 12 22 C7 21 3 17 3 12 V6 L12 2 Z" fill="var(--primary)" />
-            <path d="M9 12.5 L11 14.5 L15.5 9.5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-          </svg>
-        </div>
-        <div>
-          <div className="brand-name">RAKABA</div>
-          <div className="brand-ar">رقابة</div>
-          <div className="brand-tagline">la vigilance fiscale, augmentée</div>
-        </div>
+        <img className="brand-logo" src={`${import.meta.env.BASE_URL}logo.png`} alt="RAKABA — رقابة" />
       </div>
 
       <div className="user-card">
-        <div className="avatar">AB</div>
+        <div className="avatar">{initials(inspectorName)}</div>
         <div>
-          <div className="user-name">Amira Ben Salem</div>
-          <div className="user-role"><span className="dot dot-online" />Inspectrice fiscale</div>
+          <div className="user-name">{inspectorName || "Inspecteur"}</div>
+          <div className="user-role"><span className="dot dot-online" />Inspecteur RAKABA</div>
         </div>
       </div>
 
@@ -76,7 +75,7 @@ export default function Sidebar({ activeView, onNavigate }) {
           Vue d'ensemble
         </a>
 
-        <div className="nav-group-label">Pipelines</div>
+        <div className="nav-group-label">Parcours métier</div>
         {PIPELINE_ITEMS.map((item) => (
           <a
             key={item.id}
@@ -89,7 +88,7 @@ export default function Sidebar({ activeView, onNavigate }) {
           </a>
         ))}
 
-        <div className="nav-group-label">Fonctionnalités</div>
+        <div className="nav-group-label">Outils</div>
         {FEATURE_ITEMS.map((item) => (
           <a
             key={item.id}

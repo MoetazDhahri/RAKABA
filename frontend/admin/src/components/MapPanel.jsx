@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { TUNISIA_PATHS, TUNISIA_VIEWBOX } from "../data/tunisiaPaths";
 
 const RISK_COLOR = {
-  eleve: "#e0473f",
+  eleve: "#bc141f",
   moyen: "#e8963a",
   faible: "#279a63",
-  traite: "#2d5fdb",
+  non_evalue: "#98a2b3",
+  traite: "#132130",
   none: "#dbe2ee",
 };
 
@@ -16,12 +17,13 @@ function dominantCategory(region) {
     ["moyen", region.moyen],
     ["traite", region.traite],
     ["faible", region.faible],
+    ["non_evalue", region.non_evalue],
   ];
   entries.sort((a, b) => b[1] - a[1]);
   return entries[0][1] > 0 ? entries[0][0] : "none";
 }
 
-export default function MapPanel({ regions }) {
+export default function MapPanel({ regions, onRegionSelect, selectedRegionId }) {
   const [zoom, setZoom] = useState(1);
   const [hoverGid, setHoverGid] = useState(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -92,10 +94,11 @@ export default function MapPanel({ regions }) {
                     if (!pathRefs.current[gov.id]) pathRefs.current[gov.id] = [];
                     pathRefs.current[gov.id][i] = el;
                   }}
-                  className="gov-path"
+                  className={`gov-path ${selectedRegionId === gov.id ? "is-selected" : ""}`}
                   d={d}
                   fill={RISK_COLOR[category]}
                   onMouseEnter={() => setHoverGid(gov.id)}
+                  onClick={() => onRegionSelect?.(region || { governorate_id: gov.id, governorate_name: gov.id, total: 0 })}
                 />
               ));
             })}
@@ -126,15 +129,19 @@ export default function MapPanel({ regions }) {
             {hoverRegion.eleve > 0 && <>Risque élevé : {hoverRegion.eleve}<br /></>}
             {hoverRegion.moyen > 0 && <>Risque moyen : {hoverRegion.moyen}<br /></>}
             {hoverRegion.faible > 0 && <>Risque faible : {hoverRegion.faible}<br /></>}
+            {hoverRegion.non_evalue > 0 && <>Non évalué : {hoverRegion.non_evalue}<br /></>}
             {hoverRegion.traite > 0 && <>Traité : {hoverRegion.traite}</>}
           </div>
         )}
       </div>
 
+      <p className="map-hint">Cliquez sur une région pour afficher ses nouvelles détections.</p>
+
       <div className="map-legend">
         <span><i className="dot dot-eleve" />Risque élevé</span>
         <span><i className="dot dot-moyen" />Risque moyen</span>
         <span><i className="dot dot-faible" />Risque faible</span>
+        <span><i className="dot dot-none" />Non évalué</span>
         <span><i className="dot dot-traite" />Traité</span>
       </div>
     </div>
