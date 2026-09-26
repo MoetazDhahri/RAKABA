@@ -211,6 +211,21 @@ Pénalité : `-0.3` par flag, score borné `[0, 1]`.
 ### F2.7 — GNN (optionnel)
 GraphSAGE 2 couches. Si PyTorch Geometric n'est pas installé ou si l'entraînement échoue, `gnn_anomaly_score` retourne `None` sans jamais lever d'exception.
 
+Entraîné au démarrage (`startup_pipeline2`) sur le **vrai** graphe reconstruit
+depuis `entity_links` (Pipeline 1) s'il existe déjà assez de données (≥ 2
+arêtes) ; sinon, sur un warm-up synthétique de secours — dans ce cas
+`gnn_anomaly_score(entity_id)` renverra `None` pour toute vraie entité tant
+que Pipeline 1 n'a pas tourné. **Pour un GNN utile en démo : lancer Pipeline
+1 (`python -m pipeline1.pipeline`) avant de démarrer le backend unifié**, pas
+après — l'entraînement ne se relance pas automatiquement en cours de route
+(F2.7 reste un enrichissement optionnel, jamais un point de blocage : F2.3
+Isolation Forest fonctionne dans tous les cas).
+
+L'entraînement est auto-supervisé avec des pseudo-labels à zéro pour tous
+les nœuds (cf. docstring de `gnn.py`) : sur un petit graphe, les scores
+convergent vite vers ~0 pour tout le monde — un signal faible par
+construction de cette méthode, pas un bug d'intégration.
+
 ---
 
 ## Intégration avec les autres Pipelines

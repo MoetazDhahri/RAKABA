@@ -37,3 +37,6 @@ Thumbs.db
 
 # Test artifacts
 .pytest_cache/
+
+# Local tooling
+.claude/
