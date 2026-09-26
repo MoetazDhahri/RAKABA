@@ -1,0 +1,6 @@
+flask>=3.0
+duckdb>=1.0
+openai>=1.51
+python-dotenv>=1.0
+elevenlabs>=1.0
+python-multipart>=0.0.9

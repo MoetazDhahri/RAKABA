@@ -1,0 +1,33 @@
+# RAKABA — Pipeline 2 dépendances
+# Versions épinglées pour reproductibilité
+# (sqlalchemy retiré : Pipeline 2 utilise maintenant le DuckDB partage, voir pipeline2/database.py)
+
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+duckdb>=1.0
+pydantic==2.7.1
+python-multipart>=0.0.9
+
+# ML
+scikit-learn==1.4.2
+numpy==1.26.4
+pandas==2.2.2
+
+# Graphe
+networkx==3.3
+
+# Forensique documentaire (F2.2 etendu : vrais fichiers PDF/image, voir document_forensics.py)
+pypdf>=4.0
+pymupdf>=1.24
+Pillow>=10.0
+
+# OCR (photos de factures, y compris manuscrites - voir pipeline2/ocr.py pour
+# ce qui est fiable ou non). Necessite aussi le moteur Tesseract lui-meme
+# (binaire natif, pas seulement ce paquet Python) : sur Windows,
+# `winget install --id UB-Mannheim.TesseractOCR -e`. Sans le binaire, l'OCR
+# se desactive proprement (extraction de texte vide, pas d'erreur).
+pytesseract>=0.3.10
+
+# GNN (optionnel — commenter si PyTorch non disponible)
+# torch==2.3.0
+# torch-geometric==2.5.3
