@@ -60,13 +60,20 @@ des entités et des liens réels → P2 les score et reconstruit son graphe
 depuis `entity_links` → P3 les lit via `consulter_entite`/`entites_liees` —
 rien n'est écrasé).
 
-⚠️ **Reste à faire** : Pipeline 2 (FastAPI) et Pipeline 3 (Flask) sont deux
-process séparés qui ouvriraient chacun `rakaba.duckdb` — DuckDB ne supporte
-qu'un seul process écrivain à la fois sur un même fichier. Le cahier des
-charges (§14) prévoit un seul backend ; les fusionner en un seul process
-(monter le WSGI Flask de P3 dans l'app FastAPI de P2, par exemple) n'est pas
-encore fait. Pour l'instant, ne pas lancer les deux services en même temps
-contre le même fichier.
+### ✅ Un seul backend (résolu)
+
+Pipeline 2 (FastAPI) et Pipeline 3 (Flask) tournaient comme deux process
+séparés, qui se seraient disputé le verrou mono-écrivain de DuckDB sur
+`rakaba.duckdb`. Résolu : la logique de Pipeline 3 (`handlers.py`) est
+maintenant servie par les deux — un adaptateur Flask (`pipeline3/app.py`,
+toujours utilisable seul pour le dev) et un router FastAPI
+(`pipeline3/router.py`) monté directement dans le `main.py` racine, à côté
+du router Pipeline 2. `python -m uvicorn main:app` lance donc désormais tout
+le backend (P2 + P3) en un seul process, un seul fichier DuckDB, comme le
+prévoit le cahier des charges (§14). Vérifié de bout en bout : entité réelle
+créée par Pipeline 1 → `/api/chat/client` classifie et escalade → visible
+sur `/api/escalations` → `/api/investigate` gère correctement une entité
+inconnue (404) — le tout dans le même process que les endpoints `/pipeline2/*`.
 
 ## Stack technique
 
@@ -74,8 +81,9 @@ contre le même fichier.
 - **Persistance (P1, P2, P3)** : DuckDB partagé — fichier local unique, zéro configuration
 - **Détection d'anomalie (P2)** : `scikit-learn` (Isolation Forest)
 - **Graphe et GNN (P2)** : `NetworkX`, PyTorch Geometric (GraphSAGE, optionnel)
-- **Backend (P2)** : FastAPI + Uvicorn
-- **Backend (P3)** : Flask
+- **Backend unifié (P2 + P3)** : FastAPI + Uvicorn (`main.py`, racine du dépôt) —
+  Pipeline 3 est aussi utilisable seule en Flask pour le développement
+  (`pipeline3/app.py`), les deux servent la même logique (`pipeline3/handlers.py`)
 - **IA conversationnelle et agent (P3)** : Grok (client compatible OpenAI), tool-use —
   note : le cahier des charges (§13) prévoyait Claude/API Anthropic ; le code
   actuel utilise Grok, à confirmer si c'est un choix définitif de l'équipe
@@ -97,13 +105,16 @@ python -m pipeline1.pipeline          # un cycle automatisé
 python -m pipeline1.demo_loop --fresh --interval 8   # mode démo en continu
 python -m pytest pipeline1/tests -v   # tests
 
-# Pipeline 2 (service FastAPI indépendant pour l'instant, voir pipeline2/README.md)
-# note : requirements.txt et main.py sont a la racine du depot (structure de Khalil)
+# Backend unifié : Pipeline 2 + Pipeline 3 dans le même process FastAPI
 pip install -r requirements.txt
-uvicorn main:app --reload
-
-# Pipeline 3 (voir pipeline3/README.md)
 pip install -r pipeline3/requirements.txt
+cp pipeline3/.env.example pipeline3/.env   # puis renseigner GROK_API_KEY
+uvicorn main:app --reload
+# -> /pipeline2/*  (voir pipeline2/README.md)
+# -> /api/chat/client, /api/chat/admin, /api/investigate, /api/escalations  (voir pipeline3/README.md)
+
+# Pipeline 3 seule, en Flask (dev/tests indépendants, voir pipeline3/README.md)
+cd pipeline3 && python app.py
 ```
 
 Chaque pipeline documente ses propres détails, règles de scoring et points

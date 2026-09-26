@@ -1,8 +1,16 @@
 """
-main.py — Application FastAPI RAKABA (point d'entrée).
+main.py — Application FastAPI RAKABA (point d'entrée unifié).
 
-Intègre la Pipeline 2. Les Pipelines 1 et 3 peuvent être ajoutés
-en suivant le même pattern.
+Un seul backend pour les Pipelines 2 et 3, conformément au cahier des
+charges (section 14 : "un seul backend exposant deux interfaces"). Les deux
+pipelines partagent le même fichier DuckDB (pipeline1/db.py définit le
+schéma) ; les faire tourner comme deux process séparés (l'ancien
+`pipeline3/app.py` en Flask à côté de cette app FastAPI) se heurterait au
+verrou mono-écrivain de DuckDB sur ce fichier.
+
+Pipeline 1 n'expose pas d'API HTTP à ce jour (son point d'entrée est le
+script `python -m pipeline1.pipeline` / `pipeline1.demo_loop`) ; ses tables
+sont lues directement par 2 et 3 via le fichier DuckDB partagé.
 """
 
 from __future__ import annotations
@@ -18,7 +26,7 @@ logging.basicConfig(
 
 app = FastAPI(
     title       = "RAKABA — Plateforme de détection fiscale",
-    description = "Pipeline 2 : Vérification et scoring documentaire",
+    description = "Pipeline 2 (vérification et scoring documentaire) + Pipeline 3 (chatbot et agent d'investigation)",
     version     = "1.0.0",
 )
 
@@ -29,10 +37,16 @@ async def on_startup() -> None:
     from pipeline2 import startup_pipeline2
     startup_pipeline2()
 
+    from pipeline3.router import startup_pipeline3
+    startup_pipeline3()
 
-# Enregistrement du router Pipeline 2
+
+# Enregistrement des routers Pipeline 2 et Pipeline 3
 from pipeline2 import pipeline2_router
 app.include_router(pipeline2_router)
+
+from pipeline3.router import router as pipeline3_router
+app.include_router(pipeline3_router)
 
 
 @app.get("/health", tags=["System"])

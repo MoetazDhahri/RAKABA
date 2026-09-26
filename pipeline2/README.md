@@ -104,13 +104,8 @@ Au démarrage, l'application :
 1. Ouvre `rakaba.duckdb` et crée les tables du schéma partagé si elles n'existent pas
 2. Entraîne l'Isolation Forest sur 500 documents synthétiques (seed=42)
 3. Tente d'entraîner le GNN — silencieusement ignoré si PyTorch Geometric est absent
-
-> ⚠️ Ne pas lancer simultanément avec Pipeline 3 (Flask, `pipeline3/app.py`)
-> sur le même fichier `rakaba.duckdb` pour l'instant : DuckDB verrouille le
-> fichier pour un seul processus écrivain à la fois. Le cahier des charges
-> (§14) prévoit un seul backend pour les deux interfaces ; fusionner les deux
-> apps (monter le router Pipeline 2 et le blueprint/WSGI de Pipeline 3 dans
-> un seul process) est la vraie solution, pas encore faite.
+4. Monte aussi le router Pipeline 3 (`/api/chat/*`, `/api/investigate`, `/api/escalations`) —
+   ce `main.py` est le backend unifié des deux pipelines (voir README racine)
 
 **Swagger UI** : [http://localhost:8000/docs](http://localhost:8000/docs)
 

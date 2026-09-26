@@ -4,10 +4,13 @@ Flask backend for the RAKABA chatbot: one engine, two access-controlled
 scopes (client / admin), plus an autonomous investigation agent with
 explainable tool-calling. No frontend here.
 
-This is a standalone Flask app, separate from the FastAPI app in `main.py` /
-`pipeline2/` at the repo root. It runs and is tested independently; wiring it
-into the shared `main.py` (per the pattern noted there for Pipelines 1 and 3)
-is a follow-up integration step, not done here.
+Two ways to run this: standalone (`app.py`, Flask, this directory) for
+independent dev/testing, or mounted into the unified backend
+(`pipeline3/router.py`, FastAPI, included from the repo-root `main.py`
+alongside Pipeline 2) for the actual demo — both call the same logic in
+`handlers.py`, so there's one source of truth either way. Running standalone
+and the unified backend against the same `rakaba.duckdb` file at the same
+time isn't supported (DuckDB allows one writer process per file); pick one.
 
 ## Setup
 
@@ -125,8 +128,11 @@ curl http://localhost:5000/api/escalations
 
 ## Files
 
-- `app.py` - Flask app + routes
-- `db.py` - DuckDB connection + mock data seeding
+- `handlers.py` - framework-agnostic route logic (single source of truth); both adapters below call this
+- `app.py` - standalone Flask adapter (dev/testing)
+- `router.py` - FastAPI adapter, mounted into the repo-root `main.py` for the unified backend
+- `__init__.py` - sys.path bootstrap so this package's flat sibling-imports resolve when mounted from outside
+- `db.py` - DuckDB connection (shared file, shared schema from `pipeline1/db.py`) + declarations seeding
 - `grok_client.py` - Grok API wrapper (chat + tool-calling loop)
 - `tools.py` - the 4 investigation tools + JSON schemas
 - `escalation.py` - client-side keyword/intent classifier
